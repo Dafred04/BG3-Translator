@@ -8,7 +8,7 @@ from .providers import (
     TranslationError,
     get_provider,
 )
-from .engine import TranslationEngine, TranslationProgress
+from .engine import TranslationEngine
 
 __all__ = [
     "DictionaryStore",
@@ -20,5 +20,4 @@ __all__ = [
     "TranslationError",
     "get_provider",
     "TranslationEngine",
-    "TranslationProgress",
 ]

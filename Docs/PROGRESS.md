@@ -1,4 +1,4 @@
-# BG3 Mod Translator v2 — Progress
+# BG3 Mod Translator v2 — прогресс
 
 Полная переработка PySide6-приложения "BG3 Mod Translator" (перевод модов Baldur's Gate 3).
 Проект: `C:\Users\user\Desktop\BG3_ModTranslator_New`
@@ -11,53 +11,67 @@
 - Словарь/переводческая память (reuse переводов)
 - Валидация плейсхолдеров: `<LSTag/>`, `&entity;`, `{0}`, `[1]`, `\n`
 - Версионная защита loca (target version >= source)
-- Режим апгрейда: переиспользование UUID/Folder старого CHS-пака
 - Экспорт: .pak / .xml / .zip (BG3MM-совместимый)
 - Настройки: провайдеры, API-ключи, пакетный размер, строгий режим
 
 ## Архитектура
 ```
 src/bg3_translator/
-  config.py          — пути, настройки, языки ✅
-  models/translation.py — TranslationEntry, DictionaryEntry, ModMetadata, TranslationProject ✅
-  core/              — pak/loca/xml обработка, валидация
-  services/          — translation providers, dictionary, project store
-  ui/                — PySide6: главный экран, редактор, настройки
-  utils/             — helpers
+  config.py              — пути, настройки, языки
+  models/translation.py  — TranslationEntry, DictionaryEntry, ModMetadata, TranslationProject
+  core/                  — pak.py, loca.py, locaxml.py, mods.py, validation.py
+  services/              — providers.py, dictionary.py, engine.py (async)
+  ui/                    — PySide6: theme, widgets, main_window, pages/
+  utils/                 — helpers
 ```
 
 ## Milestones
 - [x] M1: Аудит старой версии, проектирование архитектуры
-- [x] M2: config.py + models (проверено: round-trip сериализация)
-- [x] M3: core — XML локализации (locaxml.py), валидация плейсхолдеров (validation.py) ✅ tests/test_core.py passed
-- [x] M4: services — словарь (SQLite), провайдеры перевода (Google Free + OpenAI-совместимые) ✅ tests/test_services.py passed (6 проверок: dictionary, engine dictionary-first, provider+cache, placeholder guard, batch progress)
-- [x] M5: UI — дизайн-система (theme.py, widgets.py), главное окно (sidebar-nav, toast), страницы Dashboard/Editor/Dictionary/Settings ✅ tests/test_ui.py passed (offscreen)
-- [x] M6: core/pak.py — чтение LSPK v17/v18 (LZ4/Zlib/Zstd), writer, интеграция импорта (.pak/.zip/.xml/папка) и экспорта (.xml/.pak) ✅ tests/test_pak.py passed (round-trip, bad signature, ImportWorker pak+zip)
-- [x] M7: Финальное тестирование ✅ tests/test_launch.py (запуск через main.main(), offscreen, чистое завершение), requirements.txt, README.md
+- [x] M2: config.py + models (round-trip сериализация)
+- [x] M3: core — XML локализации (locaxml.py), валидация плейсхолдеров (validation.py)
+- [x] M4: services — словарь (SQLite), провайдеры перевода (Google Free + OpenAI-совместимые)
+- [x] M5: UI — дизайн-система, главное окно, страницы Dashboard/Editor/Dictionary/Settings
+- [x] M6: core/pak.py — чтение/запись LSPK v17/v18, импорт/экспорт
+- [x] M7: Финальное тестирование запуска, requirements.txt, README.md
+- [x] M8: bugfix unique_tav.pak — корректный v18 file list + бинарный .loca + flat XML + регресс-тест
+- [x] M9: .gitignore для тестовых модов и скриптов анализа
+- [x] M10: восстановление ядра после компактификации контекста (см. ниже)
 
-## Тесты (финальный прогон — все зелёные)
-- M2: `python -c "from bg3_translator.models import *; ..."` — OK (round-trip)
-- M3: `python tests\test_core.py` — OK (validation + locaxml round-trip)
-- M4: `python tests\test_services.py` — OK (dictionary, engine dictionary-first, provider+cache, placeholder guard, batch progress)
-- M5: `python tests\test_ui.py` — OK (offscreen: nav, pages, editing, validation, filters)
-- M6: `python tests\test_pak.py` — OK (pak round-trip LZ4, bad signature, ImportWorker pak+zip end-to-end)
-- M7: `python tests\test_launch.py` — OK (полный запуск приложения, чистое завершение)
+## M10 — восстановление ядра (post-compaction repair)
+Файлы были повреждены при компактификации контекста. Исправлено:
+- services/engine.py — полностью переписан. Было: тройное дублирование классов
+  StageId/JobProgress/TranslationEngine, метод _run_core внутри датакласса, отсутствовал
+  _emit, использовалось несуществующее поле done.
+  Стало: чистый async-движок (worker-thread + PySide6 signals, UI не блокируется),
+  подробный прогресс (этап, текущий мод/файл, счётчики, скорость, ETA, ошибки),
+  + синхронный API translate_entry / translate_batch для тестов и точечного перевода.
+- models/translation.py — убран мёртвый код (return len() после return entry).
+- core/mods.py — добавлен обязательный handle в TranslationEntry, импорт EntryType,
+  поле ModScan.unsupported.
+- tests/test_async_engine.py — FakeProvider.is_configured(); проверка завершения
+  через processed_files вместо несуществующего done.
 
-## Итог
-Приложение полностью функционально: импорт .pak/.zip/.xml/папки → редактор с поиском/фильтрами → словарь + автоперевод (Google Free / OpenAI-совместимые) → валидация плейсхолдеров → экспорт .xml/.pak. Современный UI: sidebar-навигация, карточки, toast-уведомления, light/dark тема, прогресс батч-перевода, фоновый импорт.
+## Прогон тестов (все зелёные)
+- test_core.py        — CORE OK (валидация + XML loca)
+- test_services.py    — SERVICES OK (словарь, движок dictionary-first, provider+cache, placeholder-guard, batch)
+- test_pak.py         — PAK OK (round-trip LZ4, bad signature, ImportWorker pak+zip)
+- test_ui.py          — UI OK (offscreen: навигация, редактор, фильтры)
+- test_launch.py      — LAUNCH OK (полный запуск, чистое завершение)
+- test_unique_tav.py  — TAV OK (регресс: 125 локализаций, key overlap 125/125)
+- test_async_engine.py — ASYNC OK (прогресс 2/2, 100%, сигналы не блокируют UI)
+
+## Следующие шаги
+1. Подключить async-движок к UI (кнопка "Перевести" / "Перевести всё" → run_async + экран прогресса).
+2. Восстановить выбор версии Gemini + получение списка моделей через API.
+3. Полный русский UI во всех страницах (сейчас частично).
+4. Онбординг первого запуска.
+5. Диагностика: таблица причин пропусков/ошибок по файлам.
+
+## Запуск
+```
+pip install -r requirements.txt
+python main.py
+```
 
 ## Замечания
-- git не установлен в системе — контроль версий через PROGRESS.md
-## Патч 1 (bugfix: упаковка unique_tav + .loca/.xml):
-- Причина поломки реального .pak (KAZSTRA_UniqueTav, 507 файлов): неверный разбор заголовка списка файлов v18. LSLib ReadCompressedFileList: numFiles u32 @off, compressedSize u32 @off+4, LZ4 payload @off+8 (без префикса store_size).
-- Фикс: читаем по спецификации, валидируем num_files*272, раскрываем бинарные .loca (LSLib LocaResource), распознаём плоский XML <content contentuid> (как в упаковках), иначе translated_string/content.
-- Результат: 125 локализаций, handle-наборы xml и loca полностью совпадают. Регресс-тест tests/test_unique_tav.py PASSED.
-- Тесты: test_core / test_services / test_pak / test_ui / test_launch + test_unique_tav - все зелёные.
-
-## ���� 2 (bugfix: �������� unique_tav):
-- ������� ������� real .pak: �������� ������ v18 file list (numFiles u32 + compressedSize u32 + LZ4 ��� store_size).
-- �������� �������� �������� .loca (LSLib LocaResource).
-- ��������� ������� XML <content contentuid> (��� � ��������� �����).
-- �������-���� test_unique_tav.py: 125 �����������, handle-������ ���������.
-- ������ ���� ������: test_core / test_services / test_pak / test_ui / test_launch / test_unique_tav - ��� ������.
-
+- Проект под git; репозиторий привязан к https://github.com/Dafred04/BG3-Translator.git

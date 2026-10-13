@@ -137,7 +137,7 @@ class TranslationEntry:
         entry.source_placeholders = [Placeholder(**p) for p in data.get("source_placeholders", [])]
         entry.target_placeholders = [Placeholder(**p) for p in data.get("target_placeholders", [])]
         return entry
-        return len(self.validation_errors) > 0
+
 
 
 @dataclass
