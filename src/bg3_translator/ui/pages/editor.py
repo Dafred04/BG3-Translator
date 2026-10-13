@@ -62,13 +62,13 @@ class ImportWorker(QObject):
             try:
                 extract_pak(p, temp_dir)
             except PakError as exc:
-                raise RuntimeError(f"Could not read pak: {exc}") from exc
+                raise RuntimeError(f"Не удалось прочитать пакет: {exc}") from exc
             xml_files = self._find_xmls(temp_dir)
         else:
-            raise RuntimeError(f"Unsupported file type: {p.suffix}")
+            raise RuntimeError(f"Неподдерживаемый тип файла: {p.suffix}")
 
         if not xml_files:
-            raise RuntimeError("No localization XML files found in the provided source")
+            raise RuntimeError("В источнике не найдено файлов локализации (XML)")
 
         entries = []
         for xf in xml_files:
@@ -77,7 +77,7 @@ class ImportWorker(QObject):
             entries.extend(loca_to_entries(parsed, self.source_lang, self.target_lang))
 
         if not entries:
-            raise RuntimeError("Localization files contained no strings")
+            raise RuntimeError("Файлы локализации не содержат строк")
 
         metadata = ModMetadata(
             name=p.stem,
@@ -115,27 +115,27 @@ class EditorPage(QWidget):
         lay.setContentsMargins(32, 28, 32, 28)
         lay.setSpacing(14)
 
-        header = QLabel("Translate")
+        header = QLabel("Перевод")
         header.setObjectName("Title")
         lay.addWidget(header)
 
         bar = QHBoxLayout()
         bar.setSpacing(10)
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Search source or translation…")
+        self.search.setPlaceholderText("Поиск по исходному тексту или переводу…")
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self._apply_filter)
         bar.addWidget(self.search, 1)
 
         self.filter_box = QComboBox()
-        self.filter_box.addItem("All", "all")
-        self.filter_box.addItem("Untranslated", "untranslated")
-        self.filter_box.addItem("Translated", "translated")
-        self.filter_box.addItem("Errors", "errors")
+        self.filter_box.addItem("Все", "all")
+        self.filter_box.addItem("Не переведено", "untranslated")
+        self.filter_box.addItem("Переведено", "translated")
+        self.filter_box.addItem("С ошибками", "errors")
         self.filter_box.currentIndexChanged.connect(self._apply_filter)
         bar.addWidget(self.filter_box)
 
-        self.translate_btn = PrimaryButton("Translate all")
+        self.translate_btn = PrimaryButton("Перевести всё")
         self.translate_btn.clicked.connect(self._translate_all)
         bar.addWidget(self.translate_btn)
 
@@ -144,7 +144,7 @@ class EditorPage(QWidget):
         self.cancel_btn.setVisible(False)
         bar.addWidget(self.cancel_btn)
 
-        self.export_btn = PrimaryButton("Export…")
+        self.export_btn = PrimaryButton("Экспорт…")
         self.export_btn.clicked.connect(self._export)
         bar.addWidget(self.export_btn)
         lay.addLayout(bar)
@@ -154,7 +154,7 @@ class EditorPage(QWidget):
         lay.addWidget(self.progress)
 
         self.table = QTableWidget(0, 3)
-        self.table.setHorizontalHeaderLabels(["Status", "Source", "Translation"])
+        self.table.setHorizontalHeaderLabels(["Статус", "Исходный текст", "Перевод"])
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked
@@ -167,7 +167,7 @@ class EditorPage(QWidget):
         self.table.itemChanged.connect(self._on_item_changed)
         lay.addWidget(self.table, 1)
 
-        self.empty_label = QLabel("No project loaded.\nOpen a mod from the Dashboard to start.")
+        self.empty_label = QLabel("Проект не загружен.\nОткройте мод на главном экране, чтобы начать.")
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.empty_label.setObjectName("Subtitle")
         lay.addWidget(self.empty_label, 1)
@@ -204,13 +204,13 @@ class EditorPage(QWidget):
     @staticmethod
     def _status_label(status: TranslationStatus) -> str:
         return {
-            TranslationStatus.NEW: "○ New",
-            TranslationStatus.TRANSLATED: "● Translated",
-            TranslationStatus.DICTIONARY_MATCH: "◆ Dictionary",
+            TranslationStatus.NEW: "○ Новый",
+            TranslationStatus.TRANSLATED: "● Переведено",
+            TranslationStatus.DICTIONARY_MATCH: "◆ Словарь",
             TranslationStatus.AUTO_TRANSLATED: "▲ AI",
-            TranslationStatus.NEEDS_REVIEW: "⚑ Review",
-            TranslationStatus.APPROVED: "✔ Approved",
-            TranslationStatus.LOCKED: "Locked",
+            TranslationStatus.NEEDS_REVIEW: "⚑ Проверка",
+            TranslationStatus.APPROVED: "✔ Готово",
+            TranslationStatus.LOCKED: "Закрыто",
         }.get(status, status.value)
 
     # ---------- editing ----------
@@ -244,19 +244,19 @@ class EditorPage(QWidget):
             return
         needle = self.search.text().lower()
         mode = self.filter_box.currentData()
+        by_handle = {e.handle: e for e in project.entries}
         for row in range(self.table.rowCount()):
             src = self.table.item(row, self.COL_SRC).text().lower()
             tgt = self.table.item(row, self.COL_TGT).text().lower()
-            status_txt = self.table.item(row, self.COL_STATUS).text()
+            handle = self.table.item(row, self.COL_TGT).data(Qt.ItemDataRole.UserRole)
+            entry = by_handle.get(handle)
             match_text = (not needle) or (needle in src) or (needle in tgt)
             match_mode = True
             if mode == "untranslated":
-                match_mode = "New" in status_txt
+                match_mode = bool(entry) and not entry.is_translated()
             elif mode == "translated":
-                match_mode = "New" not in status_txt
+                match_mode = bool(entry) and entry.is_translated()
             elif mode == "errors":
-                handle = self.table.item(row, self.COL_TGT).data(Qt.ItemDataRole.UserRole)
-                entry = next((e for e in project.entries if e.handle == handle), None)
                 match_mode = bool(entry and entry.has_validation_errors())
             self.table.setRowHidden(row, not (match_text and match_mode))
 
@@ -375,8 +375,8 @@ class EditorPage(QWidget):
         if not project:
             return
         menu = QMenu(self)
-        act_xml = menu.addAction("Localization XML (.xml)")
-        act_pak = menu.addAction("BG3 package (.pak)")
+        act_xml = menu.addAction("Файл локализации XML (.xml)")
+        act_pak = menu.addAction("Пакет BG3 (.pak)")
         chosen = menu.exec(self.export_btn.mapToGlobal(QPoint(0, self.export_btn.height())))
         if chosen is act_xml:
             self._export_xml()
@@ -389,8 +389,8 @@ class EditorPage(QWidget):
 
         project = self.state.project
         path, _ = QFileDialog.getSaveFileName(
-            self, "Export localization XML", f"{project.metadata.name}.xml",
-            "Localization XML (*.xml)"
+            self, "Экспорт файла локализации XML", f"{project.metadata.name}.xml",
+            "Файл локализации XML (*.xml)"
         )
         if not path:
             return
@@ -399,7 +399,7 @@ class EditorPage(QWidget):
             for e in project.entries
         ]
         Path(path).write_text(build_loca_xml(pairs), encoding="utf-8")
-        self.main.toast(f"Exported {len(pairs)} strings to {Path(path).name}", "success")
+        self.main.toast(f"Экспортировано строк: {len(pairs)} → {Path(path).name}", "success")
 
     def _export_pak(self):
         from PySide6.QtWidgets import QFileDialog
@@ -408,8 +408,8 @@ class EditorPage(QWidget):
 
         project = self.state.project
         path, _ = QFileDialog.getSaveFileName(
-            self, "Export BG3 package", f"{project.metadata.name}_Local.pak",
-            "BG3 package (*.pak)"
+            self, "Экспорт пакета BG3", f"{project.metadata.name}_Local.pak",
+            "Пакет BG3 (*.pak)"
         )
         if not path:
             return
@@ -423,8 +423,8 @@ class EditorPage(QWidget):
         try:
             write_pak(Path(path), {internal: xml_text.encode("utf-8")})
         except PakError as exc:
-            self.main.toast(f"Pak export failed: {exc}", "error", 6000)
+            self.main.toast(f"Не удалось создать пакет: {exc}", "error", 6000)
             return
         self.main.toast(
-            f"Exported pak with {len(pairs)} strings → {Path(path).name}", "success"
+            f"Пакет создан, строк: {len(pairs)} → {Path(path).name}", "success"
         )

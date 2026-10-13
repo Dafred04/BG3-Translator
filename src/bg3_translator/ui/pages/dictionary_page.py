@@ -22,13 +22,13 @@ class DictionaryPage(QWidget):
         lay.setContentsMargins(32, 28, 32, 28)
         lay.setSpacing(14)
 
-        header = QLabel("Dictionary")
+        header = QLabel("Словарь")
         header.setObjectName("Title")
         lay.addWidget(header)
 
         hint = QLabel(
-            "Translation memory: every saved translation is reused across mods. "
-            "Search below to inspect entries."
+            "Память переводов: каждое сохранённое значение переиспользуется в других "
+            "модах. Используйте поиск, чтобы просмотреть записи."
         )
         hint.setObjectName("Subtitle")
         hint.setWordWrap(True)
@@ -36,22 +36,22 @@ class DictionaryPage(QWidget):
 
         bar = QHBoxLayout()
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Search source text…")
+        self.search.setPlaceholderText("Поиск по исходному тексту…")
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self._reload)
         bar.addWidget(self.search, 1)
 
-        self.count_label = QLabel("0 entries")
+        self.count_label = QLabel("0 записей")
         self.count_label.setObjectName("Subtitle")
         bar.addWidget(self.count_label)
 
-        self.refresh_btn = QPushButton("Refresh")
+        self.refresh_btn = QPushButton("Обновить")
         self.refresh_btn.clicked.connect(self._reload)
         bar.addWidget(self.refresh_btn)
         lay.addLayout(bar)
 
         self.table = QTableWidget(0, 3)
-        self.table.setHorizontalHeaderLabels(["Source", "Translation", "Uses"])
+        self.table.setHorizontalHeaderLabels(["Источник", "Перевод", "Использований"])
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -76,7 +76,7 @@ class DictionaryPage(QWidget):
         else:
             entries = self.state.dictionary.search("", "", limit=500)
         total = self.state.dictionary.count()
-        self.count_label.setText(f"{len(entries)} shown / {total} total")
+        self.count_label.setText(f"показано {len(entries)} / всего {total}")
         self.table.setRowCount(len(entries))
         for row, e in enumerate(entries):
             self.table.setItem(row, 0, QTableWidgetItem(e.source_text))

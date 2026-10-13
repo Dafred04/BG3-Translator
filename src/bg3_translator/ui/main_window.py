@@ -41,7 +41,7 @@ class MainWindow(QMainWindow):
         logo.setObjectName("Title")
         logo.setWordWrap(True)
         side_lay.addWidget(logo)
-        subtitle = QLabel("v2.0 · Mod localization")
+        subtitle = QLabel("v2.0 · Локализация модов")
         subtitle.setObjectName("Subtitle")
         side_lay.addWidget(subtitle)
         side_lay.addSpacing(24)
@@ -60,10 +60,10 @@ class MainWindow(QMainWindow):
         self.pages: dict[str, QWidget] = {}
 
         page_defs = [
-            ("dashboard", "🏠  Dashboard", DashboardPage(self)),
-            ("editor", "📝  Translate", EditorPage(self)),
-            ("dictionary", "📚  Dictionary", DictionaryPage(self)),
-            ("settings", "⚙  Settings", SettingsPage(self)),
+            ("dashboard", "🏠  Главная", DashboardPage(self)),
+            ("editor", "📝  Перевод", EditorPage(self)),
+            ("dictionary", "📚  Словарь", DictionaryPage(self)),
+            ("settings", "⚙  Настройки", SettingsPage(self)),
         ]
         for key, label, widget in page_defs:
             btn = QPushButton(label)

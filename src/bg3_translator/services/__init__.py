@@ -1,4 +1,4 @@
-﻿from .dictionary import DictionaryStore
+from .dictionary import DictionaryStore
 from .providers import (
     BaseProvider,
     GoogleFreeProvider,
