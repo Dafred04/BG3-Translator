@@ -1,3 +1,10 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
 # Test data (mods, pak files)
 *.pak
 unique_tav.pak
