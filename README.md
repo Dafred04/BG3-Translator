@@ -1,62 +1,67 @@
-# BG3 Mod Translator v2
+# BG3 Mod Translator
 
-Современное desktop-приложение для локализации модов Baldur's Gate 3.
-Полностью переработанная версия с сохранением функционала оригинала.
+Я большой фанат модов для Baldur's Gate 3, но меня давно бесит, что почти все моды выходят только на английском. Хороших переводов ждать приходится неделями, а иногда их просто не делают. Поэтому я написал себе инструмент, который переводит моды сам — и решил, что он пригодится и другим.
 
-## Возможности
+Скачал мод с Nexus → кидаешь `.pak` или `.zip` в программу → жмёшь «Translate all» → получаешь готовый перевод. Дальше только вычитать спорные места и экспортировать обратно в `.pak` для BG3MM. Всё.
 
-- **Импорт модов**: `.pak` (LSPK v17/v18, LZ4/Zlib/Zstd), `.zip`, `.xml`/`.loc`, распакованные папки
-- **Редактор переводов**: таблица source→translation, поиск, фильтры (все/непереведённые/переведённые/ошибки), правка двойным кликом
-- **Автоперевод**: Google Translate (бесплатно, без ключа) + OpenAI-совместимые API (OpenAI, DeepSeek, OpenRouter и др.)
-- **Словарь (translation memory)**: SQLite, автоматическое повторное использование переводов между модами; сначала словарь, потом провайдер
-- **Валидация плейсхолдеров**: `<LSTag>`, `&entity;`, `{0}`, `[1]` — повреждённые переводы отклоняются (strict mode)
-- **Защита версий**: версия экспортируемой локализации никогда не ниже исходной
-- **Экспорт**: `.xml` (локализация) и `.pak` (готовый BG3-пакет с внутренним путём `Public/<Mod>/Localization/`)
-- **Настройки**: тема (light/dark/system), провайдер, API-ключ, модель, таймаут, строгий режим
-- **UX**: toast-уведомления, прогресс батч-перевода, фоновый импорт без блокировки UI
+## Что умеет
+
+- **Открывает всё, что связано с BG3-модами**: `.pak` (LSPK v17/v18 — LZ4/Zlib/Zstd), `.zip`, голые `.xml`/`.loc` или распакованную папку. Формат pak я переписал сам по спецификации LSLib, никакого Divine.exe не нужно.
+- **Редактор переводов** — таблица «оригинал → перевод» с поиском и фильтрами (непереведённые / переведённые / с ошибками). Правишь двойным кликом.
+- **Автоперевод**: Google Translate работает вообще без ключа — для пробы самое то. Если хотите качество, подключаете любой OpenAI-совместимый API (DeepSeek, OpenAI, OpenRouter…) в Settings.
+- **Словарь переводов** — SQLite-память: всё, что вы перевели один раз, переиспользуется в следующих модах. «Fire Bolt» второй раз уже не уходит в API, а берётся из словаря. Экономия токенов и единообразие терминов.
+- **Защита от битого текста** — плейсхолдеры `<LSTag>`, `&entity;`, `{0}`, `[1]` проверяются автоматически; если перевод их ломает, строгий режим отклоняет его и оставляет оригинал. В игру каша не попадёт.
+- **Экспорт** в `.xml` или сразу в готовый `.pak` с правильной внутренней структурой `Public/<Мод>/Localization/` — просто кидай в BG3MM.
+- Версия локализации при экспорте никогда не опускается ниже исходной (иначе игра может показать английский вместо перевода).
 
 ## Запуск
 
+Нужен Python 3.10+.
+
 ```bash
+git clone https://github.com/Dafred04/BG3-Mod-Translator.git
+cd BG3-Mod-Translator
 pip install -r requirements.txt
 python main.py
 ```
 
 ## Тесты
 
+Пять наборов smoke-тестов, всё проверяется офлайн (без сети и без GPU):
+
 ```bash
-python tests\test_core.py       # валидация плейсхолдеров + XML round-trip
-python tests\test_services.py   # словарь + движок перевода (offline)
-python tests\test_pak.py        # pak round-trip + ImportWorker (pak/zip)
-python tests\test_ui.py         # UI smoke test (offscreen)
+python tests\test_core.py       # плейсхолдеры + XML round-trip
+python tests\test_services.py   # словарь + движок перевода
+python tests\test_pak.py        # pak round-trip + импорт pak/zip
+python tests\test_ui.py         # UI (offscreen)
+python tests\test_launch.py     # полный запуск приложения
 ```
 
-## Структура
+## Как это устроено
 
 ```
 main.py                     — точка входа
 src/bg3_translator/
   config.py                 — пути, настройки, языки
-  models/translation.py     — TranslationEntry, DictionaryEntry, ModMetadata, TranslationProject
+  models/                   — сущности проекта перевода
   core/
-    locaxml.py              — парсинг/генерация BG3 XML локализации
-    validation.py           — извлечение/сравнение плейсхолдеров
-    pak.py                  — чтение/запись LSPK v17/v18
+    locaxml.py              # парсинг/генерация BG3 XML локализации
+    validation.py           # плейсхолдеры
+    pak.py                  # LSPK v17/v18 чтение/запись
   services/
-    dictionary.py           — SQLite translation memory
-    providers.py            — Google Free, OpenAI-compatible
-    engine.py               — словарь → провайдер → валидация
-  ui/
-    theme.py                — дизайн-система (токены + QSS light/dark)
-    widgets.py              — Card, StatTile, PrimaryButton, Toast
-    main_window.py          — окно с sidebar-навигацией
-    state.py                — общее состояние (AppState)
-    pages/                  — dashboard, editor, dictionary, settings
-tests/                      — smoke-тесты всех слоёв
-Docs/PROGRESS.md            — журнал разработки
+    dictionary.py           # словарь на SQLite
+    providers.py            # Google Free, OpenAI-compatible
+    engine.py               # словарь → провайдер → валидация
+  ui/                       # PySide6, light/dark тема
+tests/                      # smoke-тесты
 ```
 
-## Примечания
+## Пара честных оговорок
 
-- `.pak`-формат реализован по спецификации LSLib (Norbyte); BG3 — товарный знак Larian Studios. Приложение не связано с Larian.
-- Google Free использует неофициальный endpoint translate.googleapis.com; для продакшн-переводов рекомендуется настроить OpenAI-совместимый API-ключ в Settings.
+- Google Translate тут через неофициальный endpoint — для серьёзной работы настройте свой API-ключ (DeepSeek стоит копейки).
+- AI-перевод закрывает механику отлично, но диалоги всё равно стоит вычитать глазами — машина пока плохо чувствует подтекст и юмор.
+- `.pak`-формат реализован по спецификации LSLib (спасибо Norbyte!) — без него ничего бы не было. Baldur's Gate 3 — товарный знак Larian Studios, проект с ними не связан.
+
+## Лицензия
+
+MIT. Если пригодилось — пользуйтесь, форкайте, правьте.
