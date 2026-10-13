@@ -1,0 +1,4 @@
+PySide6-Essentials>=6.8
+requests>=2.31
+lz4>=4.3
+zstandard>=0.22
