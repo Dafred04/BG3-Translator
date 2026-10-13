@@ -40,7 +40,13 @@ class ParsedLoca:
 
 
 def parse_loca_xml(xml_text: str) -> ParsedLoca:
-    """Parse BG3 localization XML text into handles/contents + version."""
+    """Parse BG3 localization XML text into handles/contents + version.
+
+    Supports both real-world shapes:
+      A) translated_string/content-str (classic <content root="ResourceList">)
+      B) flat <contentList><content contentuid="..." version="N">text</content>
+         (as shipped inside mod .pak files, e.g. unique_tav)
+    """
     # strip BOM if present
     if xml_text.startswith("\ufeff"):
         xml_text = xml_text[1:]
@@ -56,12 +62,23 @@ def parse_loca_xml(xml_text: str) -> ParsedLoca:
             build=int(ver_el.get("build", 0)),
         )
 
+    # Shape A
     for ts in root.iter("translated_string"):
         handle = ts.get("handle", "")
         content_el = ts.find("content")
         content = content_el.get("str", "") if content_el is not None else ""
         if handle:
             result.entries.append((handle, content))
+    if result.entries:
+        return result
+
+    # Shape B: flat <content contentuid="...">text</content>
+    for el in root.iter("content"):
+        handle = el.get("contentuid", "")
+        if not handle:
+            continue
+        text = (el.text or "").strip()
+        result.entries.append((handle, text))
     return result
 
 

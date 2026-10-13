@@ -12,11 +12,10 @@ Header (40 bytes):
   priority        u8
   md5             16 bytes
 
-File list (at file_list_off):
-  uncompressed_size u32
-  num_files         u32
-  compressed_size   u32
-  data              compressed_size bytes (LZ4 block) of num_files entries
+File list (at file_list_off), per LSLib ReadCompressedFileList:
+  num_files       u32
+  compressed_size u32
+  data            compressed_size bytes LZ4 block (no store_size prefix) of num_files entries
 
 FileEntry v18 (272 bytes each):
   name              256 bytes, null-terminated, '/' separators
@@ -112,17 +111,25 @@ class PakReader:
             raise PakError(f"Unsupported pak version: {version} (only v17/v18 supported)")
         self.version = version
 
+        # LSLib ReadCompressedFileList: numFiles u32 @off, compressedSize u32 @off+4,
+        # LZ4 block payload @off+8 (no store_size prefix). No SOLID support in v1 of this reader.
         self._fh.seek(fl_off)
-        list_head = self._fh.read(12)
-        if len(list_head) < 12:
+        list_head = self._fh.read(8)
+        if len(list_head) < 8:
             raise PakError("Truncated file list header")
-        uncompressed_size, num_files, compressed_size = struct.unpack("<III", list_head)
-        table_data = self._fh.read(compressed_size)
-        if compressed_size > 0:
-            table = lz4.block.decompress(table_data, uncompressed_size=uncompressed_size)
-        else:
-            table = table_data
-
+        num_files, compressed_size = struct.unpack("<II", list_head)
+        if not (0 < num_files < 1_000_000):
+            raise PakError(f"Implausible file count: {num_files}")
+        payload = self._fh.read(compressed_size)
+        if len(payload) < compressed_size:
+            raise PakError("Truncated file list payload")
+        expected = num_files * ENTRY_SIZE
+        try:
+            table = lz4.block.decompress(payload, uncompressed_size=expected)
+        except Exception as exc:
+            raise PakError(f"File list decompression failed: {exc}") from exc
+        if len(table) != expected:
+            raise PakError(f"File list size mismatch: got {len(table)}, expected {expected}")
         self.entries = []
         for i in range(num_files):
             off = i * ENTRY_SIZE
@@ -232,8 +239,8 @@ def write_pak(out_path: Path, files: dict[str, bytes], compress: bool = True) ->
         # File data
         for *_rest, blob in file_blobs:
             f.write(blob)
-        # File list
-        f.write(struct.pack("<III", len(table_bytes), len(file_blobs), len(compressed_table)))
+        # File list: numFiles u32 + compressedSize u32 + LZ4 block (LSLib layout)
+        f.write(struct.pack("<II", len(file_blobs), len(compressed_table)))
         f.write(compressed_table)
 
     return out_path
