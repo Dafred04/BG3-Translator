@@ -1,9 +1,10 @@
-# Python
-__pycache__/
-*.py[cod]
-*.egg-info/
-.venv/
-venv/
+# Test data (mods, pak files)
+*.pak
+unique_tav.pak
+unique_tav_Russian.pak
+
+# Analysis / diagnostic scripts (local only)
+tools/
 
 # OS
 Thumbs.db
