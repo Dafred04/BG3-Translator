@@ -50,6 +50,14 @@ STAGE_TEXT = {
     StageId.DONE: "Завершено",
 }
 
+# Ordered list of stages shown in the progress panel.
+STAGE_ORDER = list(STAGE_TEXT.keys())
+
+# ASCII markers (emoji fonts are unreliable across platforms).
+STAGE_ICON_PENDING = "○"
+STAGE_ICON_ACTIVE = "►"
+STAGE_ICON_DONE = "•"
+
 
 @dataclass
 class JobProgress:
