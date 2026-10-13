@@ -83,6 +83,13 @@ class MainWindow(QMainWindow):
         root_lay.addWidget(self.sidebar)
         root_lay.addWidget(self.stack, 1)
 
+        # --- Status bar (bottom) ---
+        self.statusBar().setObjectName("StatusBar")
+        self.statusBar().setSizeGripEnabled(False)
+        self._status_label = QLabel("Готово")
+        self._status_label.setObjectName("Subtitle")
+        self.statusBar().addWidget(self._status_label)
+
         # Select dashboard
         self._nav_buttons[0].setChecked(True)
 
@@ -104,6 +111,10 @@ class MainWindow(QMainWindow):
         idx = keys.index(page_key)
         self._nav_buttons[idx].setChecked(True)
         self.stack.setCurrentIndex(idx)
+
+    def set_status(self, text: str):
+        """Update the bottom status bar text."""
+        self._status_label.setText(text)
 
     def toast(self, message: str, kind: str = "info", timeout_ms: int = 3500):
         """Show a floating toast notification."""

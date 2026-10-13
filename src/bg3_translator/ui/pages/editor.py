@@ -139,6 +139,11 @@ class EditorPage(QWidget):
         self.translate_btn.clicked.connect(self._translate_all)
         bar.addWidget(self.translate_btn)
 
+        self.cancel_btn = PrimaryButton("Остановить")
+        self.cancel_btn.clicked.connect(self._cancel_translate)
+        self.cancel_btn.setVisible(False)
+        bar.addWidget(self.cancel_btn)
+
         self.export_btn = PrimaryButton("Export…")
         self.export_btn.clicked.connect(self._export)
         bar.addWidget(self.export_btn)
@@ -255,49 +260,111 @@ class EditorPage(QWidget):
                 match_mode = bool(entry and entry.has_validation_errors())
             self.table.setRowHidden(row, not (match_text and match_mode))
 
-    # ---------- batch translate ----------
+    # ---------- batch translate (async, UI never freezes) ----------
     def _translate_all(self):
         project = self.state.project
         if not project:
             return
         targets = project.get_untranslated()
         if not targets:
-            self.main.toast("Nothing to translate — all strings are already done.", "info")
+            self.main.toast("Нечего переводить — все строки уже готовы.", "info")
             return
         if self.state.engine.provider is None:
             self.main.toast(
-                "No translation provider configured. Dictionary matches only. "
-                "Set one up in Settings.", "warning", 5000
+                "Провайдер перевода не настроен. Будут использованы только совпадения "
+                "из словаря. Настройте провайдера в разделе «Настройки».", "warning", 5000
             )
+
+        # Run the whole loop in the engine's worker thread. Only Qt signals
+        # (queued to the main thread) update the UI, so the window never freezes
+        # even if a single Gemini call takes many seconds.
+        engine = self.state.engine
+        self._disconnect_engine()
+        engine.progress.connect(self._on_translate_progress)
+        engine.stage.connect(self._on_translate_stage)
+        engine.finished.connect(self._on_translate_finished)
+        engine.error.connect(self._on_translate_error)
+        engine.cancelled.connect(self._on_translate_cancelled)
+
         self.progress.setVisible(True)
         self.progress.setMaximum(len(targets))
         self.progress.setValue(0)
         self.translate_btn.setEnabled(False)
-        self._pending = list(targets)
-        self._process_chunk()
+        self.cancel_btn.setVisible(True)
+        self.cancel_btn.setEnabled(True)
 
-    def _process_chunk(self, chunk: int = 20):
-        from PySide6.QtCore import QTimer
-        batch = self._pending[:chunk]
-        self._pending = self._pending[chunk:]
-        for e in batch:
-            try:
-                self.state.engine.translate_entry(e)
-            except Exception:
-                pass
-        self.progress.setValue(self.progress.value() + len(batch))
-        if self._pending:
-            QTimer.singleShot(0, lambda: self._process_chunk(chunk))
-        else:
-            self.progress.setVisible(False)
-            self.translate_btn.setEnabled(True)
+        # Wrap only the untranslated entries; the engine mutates them in place,
+        # so the live project objects are updated directly.
+        sub = TranslationProject(
+            metadata=project.metadata,
+            entries=list(targets),
+            source_language=project.source_language,
+            target_language=project.target_language,
+        )
+        engine.run_async(sub)
+
+    def _cancel_translate(self):
+        if self.state.engine.is_running():
+            self.cancel_btn.setEnabled(False)
+            self.state.engine.cancel()
+
+    def _on_translate_stage(self, _stage_id, stage_text):
+        self.main.set_status(stage_text)
+
+    def _on_translate_progress(self, pg):
+        self.progress.setMaximum(max(getattr(pg, "total_files", 0), 1))
+        self.progress.setValue(getattr(pg, "processed_files", 0))
+        err = getattr(pg, "failed", 0)
+        skip = getattr(pg, "skipped", 0)
+        done = getattr(pg, "succeeded", 0)
+        self.main.set_status(
+            f"{pg.stage_text} · {done}/{getattr(pg, 'lines_total', 0)} строк"
+            + (f" · ошибок: {err}" if err else "")
+            + (f" · пропущено: {skip}" if skip else "")
+        )
+
+    def _finish_translate(self):
+        self.progress.setVisible(False)
+        self.translate_btn.setEnabled(True)
+        self.cancel_btn.setVisible(False)
+        self._disconnect_engine()
+        if self.state.project:
             self.state.project.update_stats()
-            self.reload()
-            s = self.state.stats()
-            self.main.toast(
-                f"Batch done: {s['translated']}/{s['total']} translated ({s['percent']}%)",
-                "success", 5000,
-            )
+        self.reload()
+
+    def _on_translate_finished(self, _project):
+        self._finish_translate()
+        s = self.state.stats()
+        self.main.toast(
+            f"Перевод завершён: {s['translated']}/{s['total']} строк ({s['percent']}%)",
+            "success", 5000,
+        )
+
+    def _on_translate_error(self, message):
+        self._finish_translate()
+        self.main.toast(message, "error", 6000)
+
+    def _on_translate_cancelled(self):
+        self._finish_translate()
+        self.main.toast("Перевод остановлен пользователем.", "warning")
+        if self.state.project:
+            self.state.project.update_stats()
+        self.reload()
+
+    def _disconnect_engine(self):
+        engine = self.state.engine
+        for sig, slot in (
+            (engine.progress, self._on_translate_progress),
+            (engine.stage, self._on_translate_stage),
+            (engine.finished, self._on_translate_finished),
+            (engine.error, self._on_translate_error),
+            (engine.cancelled, self._on_translate_cancelled),
+        ):
+            try:
+                sig.disconnect(slot)
+            except (RuntimeError, TypeError):
+                pass
+
 
     # ---------- export ----------
     def _export(self):
