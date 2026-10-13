@@ -53,3 +53,11 @@ src/bg3_translator/
 - Р¤РёРєСЃ: С‡РёС‚Р°РµРј РїРѕ СЃРїРµС†РёС„РёРєР°С†РёРё, РІР°Р»РёРґРёСЂСѓРµРј num_files*272, СЂР°СЃРєСЂС‹РІР°РµРј Р±РёРЅР°СЂРЅС‹Рµ .loca (LSLib LocaResource), СЂР°СЃРїРѕР·РЅР°С‘Рј РїР»РѕСЃРєРёР№ XML <content contentuid> (РєР°Рє РІ СѓРїР°РєРѕРІРєР°С…), РёРЅР°С‡Рµ translated_string/content.
 - Р РµР·СѓР»СЊС‚Р°С‚: 125 Р»РѕРєР°Р»РёР·Р°С†РёР№, handle-РЅР°Р±РѕСЂС‹ xml Рё loca РїРѕР»РЅРѕСЃС‚СЊСЋ СЃРѕРІРїР°РґР°СЋС‚. Р РµРіСЂРµСЃСЃ-С‚РµСЃС‚ tests/test_unique_tav.py PASSED.
 - РўРµСЃС‚С‹: test_core / test_services / test_pak / test_ui / test_launch + test_unique_tav - РІСЃРµ Р·РµР»С‘РЅС‹Рµ.
+
+## Патч 2 (bugfix: упаковка unique_tav):
+- Причина поломки real .pak: неверный разбор v18 file list (numFiles u32 + compressedSize u32 + LZ4 без store_size).
+- Добавлен бинарный читатель .loca (LSLib LocaResource).
+- Распознан плоский XML <content contentuid> (как в упаковках модов).
+- Регресс-тест test_unique_tav.py: 125 локализаций, handle-наборы совпадают.
+- Полный стек тестов: test_core / test_services / test_pak / test_ui / test_launch / test_unique_tav - все зелёные.
+
