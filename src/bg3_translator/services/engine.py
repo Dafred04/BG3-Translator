@@ -106,6 +106,7 @@ class TranslationEngine(QObject):
         self.dictionary = dictionary
         self.provider = provider
         self.strict_placeholders = True
+        self.first_error: Optional[str] = None
 
         self._worker: Optional[threading.Thread] = None
         self._stop = threading.Event()
@@ -127,6 +128,11 @@ class TranslationEngine(QObject):
         """Request a graceful stop; the worker finishes the current entry."""
         self._stop.set()
         self.cancelled.emit()
+
+    def set_provider(self, provider: Optional[BaseProvider]):
+        """Swap the translation provider without recreating the engine (keeps
+        existing Qt signal connections valid)."""
+        self.provider = provider
 
     # -- synchronous API (on-demand / tests) ------------------------------
     def translate_entry(self, entry: TranslationEntry) -> bool:
@@ -158,6 +164,7 @@ class TranslationEngine(QObject):
     # -- worker body ------------------------------------------------------
     def _run_core(self, project: TranslationProject):
         start = time.monotonic()
+        self.first_error = None
         try:
             entries: List[TranslationEntry] = list(project.entries)
             if not entries and project.metadata.source_path:
@@ -255,6 +262,10 @@ class TranslationEngine(QObject):
                 return "ok"
 
         if self.provider is None or not self.provider.is_configured():
+            if self.first_error is None:
+                self.first_error = ("Провайдер перевода не настроен. Укажите ключ API "
+                                    "Gemini в разделе «Настройки».")
+            entry.validation_errors = ["Провайдер перевода не настроен (нет ключа API)"]
             return "fail"
 
         try:
@@ -266,7 +277,11 @@ class TranslationEngine(QObject):
                     context=entry.context,
                 )
             )
-        except TranslationError:
+        except TranslationError as exc:
+            msg = str(exc).strip() or "Провайдер не вернул ответ"
+            if self.first_error is None:
+                self.first_error = msg
+            entry.validation_errors = [msg]
             return "fail"
 
         candidate = result.texts[0] if result.texts else entry.source_text

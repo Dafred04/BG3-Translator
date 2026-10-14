@@ -1,0 +1,3 @@
+validation: OK
+locaxml: OK
+M3 smoke tests passed

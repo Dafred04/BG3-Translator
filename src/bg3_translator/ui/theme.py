@@ -1,4 +1,8 @@
-"""Design system: color tokens + QSS stylesheet (light & dark)."""
+"""Design system: premium dark \"gaming / AI\" palette + QSS stylesheet.
+
+Dark graphite base with a deep red accent. Exposes Palette, DARK, LIGHT,
+build_stylesheet(palette) and DEFAULT / FONT_FAMILY / FONT_SIZE.
+"""
 
 from dataclasses import dataclass
 
@@ -6,184 +10,117 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class Palette:
     bg: str
+    bg_elevated: str
     surface: str
     surface_alt: str
     border: str
+    border_strong: str
     text: str
     text_muted: str
     accent: str
     accent_hover: str
+    accent_pressed: str
     accent_text: str
+    accent_soft: str
+    danger: str
+    danger_hover: str
     success: str
     warning: str
-    error: str
     info: str
 
 
+# Premium dark: near-black graphite with a deep red accent.
+DARK = Palette(
+    bg="#0c0d10",
+    bg_elevated="#12141a",
+    surface="#16181f",
+    surface_alt="#1e212b",
+    border="#262a35",
+    border_strong="#333846",
+    text="#eef1f6",
+    text_muted="#8b93a4",
+    accent="#e5323d",
+    accent_hover="#f2454f",
+    accent_pressed="#c11e28",
+    accent_text="#ffffff",
+    accent_soft="rgba(229,50,61,0.14)",
+    danger="#e5323d",
+    danger_hover="#f2454f",
+    success="#2fbf71",
+    warning="#e8a33d",
+    info="#4f8cff",
+)
+
+# Light fallback (rarely used; app defaults to dark).
 LIGHT = Palette(
-    bg="#f6f7f9",
+    bg="#f4f5f7",
+    bg_elevated="#ffffff",
     surface="#ffffff",
     surface_alt="#eef0f4",
     border="#dfe3e8",
-    text="#1a1d21",
-    text_muted="#6b7280",
-    accent="#4f6ef7",
-    accent_hover="#3b5bf0",
+    border_strong="#c9cfd8",
+    text="#16181f",
+    text_muted="#5c6472",
+    accent="#c81e2b",
+    accent_hover="#e5323d",
+    accent_pressed="#a11621",
     accent_text="#ffffff",
-    success="#16a34a",
-    warning="#d97706",
-    error="#dc2626",
-    info="#0284c7",
+    accent_soft="rgba(200,30,43,0.12)",
+    danger="#c81e2b",
+    danger_hover="#e5323d",
+    success="#1f9d55",
+    warning="#c67c12",
+    info="#2563eb",
 )
 
-DARK = Palette(
-    bg="#121417",
-    surface="#1b1e23",
-    surface_alt="#23272e",
-    border="#2e333b",
-    text="#e8eaed",
-    text_muted="#9aa0a6",
-    accent="#6b8aff",
-    accent_hover="#8aa2ff",
-    accent_text="#0d0f12",
-    success="#34d399",
-    warning="#fbbf24",
-    error="#f87171",
-    info="#38bdf8",
-)
+# App default theme.
+DEFAULT = DARK
 
 FONT_FAMILY = "Segoe UI"
 FONT_SIZE = 13
 
 
-def build_stylesheet(p: Palette) -> str:
-    return f"""
-* {{ font-family: "{FONT_FAMILY}"; font-size: {FONT_SIZE}px; }}
-QMainWindow, QDialog {{ background: {p.bg}; }}
-QWidget {{ color: {p.text}; }}
+def build_stylesheet(pal: Palette) -> str:
+    """Build the complete QSS stylesheet for the given palette."""
+    return (
+        "/* Base */\n"
+        f"QWidget {{ background-color: {pal.bg}; color: {pal.text}; "
+        f'font-family: "{FONT_FAMILY}"; font-size: {FONT_SIZE}px; }}\n'
 
-/* ---------- Sidebar ---------- */
-#Sidebar {{
-    background: {p.surface};
-    border-right: 1px solid {p.border};
-}}
-#NavButton {{
-    background: transparent;
-    border: none;
-    border-radius: 8px;
-    padding: 10px 14px;
-    text-align: left;
-    color: {p.text_muted};
-}}
-#NavButton:hover {{ background: {p.surface_alt}; color: {p.text}; }}
-#NavButton:checked {{
-    background: {p.accent}1a;
-    color: {p.accent};
-    font-weight: 600;
-}}
+        "/* Scrollbars */\n"
+        f"QScrollBar:vertical {{ background: {pal.bg}; width: 10px; margin: 0; }}\n"
+        f"QScrollBar::handle:vertical {{ background: {pal.border_strong}; border-radius: 5px; min-height: 30px; }}\n"
+        f"QScrollBar::handle:vertical:hover {{ background: {pal.accent_hover}; }}\n"
+        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }\n"
+        f"QScrollBar:horizontal {{ background: {pal.bg}; height: 10px; margin: 0; }}\n"
+        f"QScrollBar::handle:horizontal {{ background: {pal.border_strong}; border-radius: 5px; min-width: 30px; }}\n"
+        f"QScrollBar::handle:horizontal:hover {{ background: {pal.accent_hover}; }}\n"
+        "QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }\n"
 
-/* ---------- Buttons ---------- */
-QPushButton {{
-    background: {p.surface_alt};
-    border: 1px solid {p.border};
-    border-radius: 8px;
-    padding: 8px 16px;
-}}
-QPushButton:hover {{ background: {p.border}; }}
-QPushButton:pressed {{ background: {p.surface_alt}; }}
-QPushButton:disabled {{ color: {p.text_muted}; opacity: 0.5; }}
-QPushButton#Primary {{
-    background: {p.accent};
-    color: {p.accent_text};
-    border: none;
-    font-weight: 600;
-    padding: 9px 20px;
-}}
-QPushButton#Primary:hover {{ background: {p.accent_hover}; }}
-QPushButton#Primary:disabled {{ background: {p.surface_alt}; color: {p.text_muted}; }}
-QPushButton#Danger {{
-    background: {p.error};
-    color: #ffffff;
-    border: none;
-    font-weight: 600;
-}}
+        "/* Cards */\n"
+        f"#Card {{ background-color: {pal.surface}; border: 1px solid {pal.border}; border-radius: 10px; }}\n"
+        f"#Card:hover {{ border-color: {pal.border_strong}; }}\n"
 
-/* ---------- Cards / panels ---------- */
-#Card {{
-    background: {p.surface};
-    border: 1px solid {p.border};
-    border-radius: 12px;
-}}
-#Title {{ font-size: 18px; font-weight: 700; }}
-#Subtitle {{ color: {p.text_muted}; }}
-#StatValue {{ font-size: 26px; font-weight: 700; }}
-#StatLabel {{ color: {p.text_muted}; font-size: 12px; }}
+        "/* Buttons */\n"
+        f"#Primary {{ background-color: {pal.accent}; color: {pal.accent_text}; border: none; "
+        f"border-radius: 8px; padding: 8px 18px; font-weight: 600; }}\n"
+        f"#Primary:hover {{ background-color: {pal.accent_hover}; }}\n"
+        f"#Primary:pressed {{ background-color: {pal.accent_pressed}; }}\n"
+        f"#Primary:disabled {{ background-color: {pal.border_strong}; color: {pal.text_muted}; }}\n"
+        f"#Danger {{ background-color: {pal.danger}; color: {pal.accent_text}; border: none; "
+        f"border-radius: 8px; padding: 8px 18px; font-weight: 600; }}\n"
+        f"#Danger:hover {{ background-color: {pal.danger_hover}; }}\n"
+        f"#Danger:pressed {{ background-color: {pal.danger_hover}; }}\n"
+        f"#Danger:disabled {{ background-color: {pal.border_strong}; color: {pal.text_muted}; }}\n"
 
-/* ---------- Inputs ---------- */
-QLineEdit, QTextEdit, QPlainTextEdit, QSpinBox, QComboBox {{
-    background: {p.surface};
-    border: 1px solid {p.border};
-    border-radius: 8px;
-    padding: 7px 10px;
-    selection-background-color: {p.accent};
-}}
-QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus, QComboBox:focus {{
-    border: 1px solid {p.accent};
-}}
-QComboBox::drop-down {{ border: none; width: 24px; }}
-QComboBox QAbstractItemView {{
-    background: {p.surface};
-    border: 1px solid {p.border};
-    selection-background-color: {p.accent}33;
-}}
+        "/* Nav / Sidebar */\n"
+        f"#Sidebar {{ background-color: {pal.bg_elevated}; border-right: 1px solid {pal.border}; }}\n"
+        f"#Title {{ color: {pal.text}; font-size: {FONT_SIZE + 4}px; font-weight: 700; }}\n"
+        f"#Subtitle {{ color: {pal.text_muted}; font-size: {FONT_SIZE}px; }}\n"
+        f"#NavButton {{ background: transparent; border: none; border-radius: 8px; padding: 8px 12px; "
+        f"text-align: left; color: {pal.text}; font-size: {FONT_SIZE}px; font-weight: 500; }}\n"
+        f"#NavButton:hover {{ background-color: {pal.surface_alt}; }}\n"
+        f"#NavButton:checked {{ background-color: {pal.accent_soft}; color: {pal.accent}; font-weight: 600; }}\n"
+        f"#NavButton:disabled {{ color: {pal.text_muted}; }}\n"
+    )
 
-/* ---------- Table ---------- */
-QTableWidget {{
-    background: {p.surface};
-    border: 1px solid {p.border};
-    border-radius: 10px;
-    gridline-color: {p.border};
-}}
-QTableWidget::item {{ padding: 6px; }}
-QTableWidget::item:selected {{ background: {p.accent}22; color: {p.text}; }}
-QHeaderView::section {{
-    background: {p.surface_alt};
-    border: none;
-    border-bottom: 1px solid {p.border};
-    padding: 8px;
-    font-weight: 600;
-    color: {p.text_muted};
-}}
-
-/* ---------- Progress ---------- */
-QProgressBar {{
-    background: {p.surface_alt};
-    border: none;
-    border-radius: 6px;
-    height: 12px;
-    text-align: center;
-}}
-QProgressBar::chunk {{ background: {p.accent}; border-radius: 6px; }}
-
-/* ---------- Scrollbars ---------- */
-QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
-QScrollBar::handle:vertical {{
-    background: {p.border}; border-radius: 4px; min-height: 30px;
-}}
-QScrollBar::handle:vertical:hover {{ background: {p.text_muted}; }}
-QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; }}
-QScrollBar:horizontal {{ background: transparent; height: 10px; margin: 2px; }}
-QScrollBar::handle:horizontal {{ background: {p.border}; border-radius: 4px; min-width: 30px; }}
-
-/* ---------- Toast ---------- */
-#Toast {{
-    background: {p.surface};
-    border: 1px solid {p.border};
-    border-left: 4px solid {p.accent};
-    border-radius: 8px;
-    padding: 12px 16px;
-}}
-#ToastSuccess {{ border-left-color: {p.success}; }}
-#ToastError {{ border-left-color: {p.error}; }}
-#ToastWarning {{ border-left-color: {p.warning}; }}
-"""

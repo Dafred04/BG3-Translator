@@ -1,0 +1,1903 @@
+
+===== main.py (35 lines) =====
+"""BG3 Mod Translator v2 — application entry point."""
+
+import sys
+from pathlib import Path
+
+# Ensure src/ is importable when running from repo root
+_SRC = Path(__file__).resolve().parent / "src"
+if _SRC.exists() and str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
+
+def main() -> int:
+    from PySide6.QtWidgets import QApplication
+    from PySide6.QtCore import Qt
+    from bg3_translator.ui.main_window import MainWindow
+
+    QApplication.setHighDpiScaleFactorRoundingPolicy(
+        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+    )
+    app = QApplication(sys.argv)
+    app.setApplicationName("BG3 Mod Translator")
+    app.setOrganizationName("BG3ModTranslator")
+
+    from PySide6.QtGui import QFont
+    _font = QFont("Segoe UI", 10)
+    _font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
+    app.setFont(_font)
+
+    window = MainWindow()
+    window.show()
+    return app.exec()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+===== src/bg3_translator/config.py (150 lines) =====
+"""
+Application configuration and constants.
+"""
+
+from pathlib import Path
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional
+import json
+
+
+@dataclass
+class AppPaths:
+    """Application paths."""
+    base_dir: Path = field(default_factory=lambda: Path(__file__).parent.parent.parent.parent)
+    data_dir: Path = field(default_factory=lambda: Path.home() / "AppData" / "Local" / "BG3ModTranslator")
+    cache_dir: Path = field(default_factory=lambda: Path.home() / "AppData" / "Local" / "BG3ModTranslator" / "cache")
+    logs_dir: Path = field(default_factory=lambda: Path.home() / "AppData" / "Local" / "BG3ModTranslator" / "logs")
+    exports_dir: Path = field(default_factory=lambda: Path.home() / "Documents" / "BG3ModTranslator" / "exports")
+    glossary_dir: Path = field(default_factory=lambda: Path.home() / "AppData" / "Local" / "BG3ModTranslator" / "glossary")
+
+    def __post_init__(self):
+        for path in [self.data_dir, self.cache_dir, self.logs_dir, self.exports_dir, self.glossary_dir]:
+            path.mkdir(parents=True, exist_ok=True)
+
+
+@dataclass
+class TranslationProviderConfig:
+    """Configuration for a translation provider."""
+    name: str
+    api_key: str = ""
+    base_url: str = ""
+    model: str = ""
+    enabled: bool = True
+    priority: int = 0
+    settings: Dict = field(default_factory=dict)
+
+
+@dataclass
+class Language:
+    """Language definition."""
+    code: str
+    name: str
+    native_name: str
+    bg3_folder_name: str
+    flag_emoji: str = ""
+
+
+# Supported BG3 languages (matching Larian's folder names)
+SUPPORTED_LANGUAGES: List[Language] = [
+    Language("en", "English", "English", "English", "🇺🇸"),
+    Language("zh", "Chinese (Simplified)", "简体中文", "Chinese", "🇨🇳"),
+    Language("zh_tw", "Chinese (Traditional)", "繁體中文", "ChineseTraditional", "🇹🇼"),
+    Language("ko", "Korean", "한국어", "Korean", "🇰🇷"),
+    Language("ja", "Japanese", "日本語", "Japanese", "🇯🇵"),
+    Language("ru", "Russian", "Русский", "Russian", "🇷🇺"),
+    Language("pl", "Polish", "Polski", "Polish", "🇵🇱"),
+    Language("de", "German", "Deutsch", "German", "🇩🇪"),
+    Language("fr", "French", "Français", "French", "🇫🇷"),
+    Language("es", "Spanish (Spain)", "Español (España)", "Spanish", "🇪🇸"),
+    Language("es_mx", "Spanish (Latin America)", "Español (Latinoamérica)", "LatinSpanish", "🇲🇽"),
+    Language("pt_br", "Portuguese (Brazil)", "Português (Brasil)", "BrazilianPortuguese", "🇧🇷"),
+    Language("it", "Italian", "Italiano", "Italian", "🇮🇹"),
+    Language("tr", "Turkish", "Türkçe", "Turkish", "🇹🇷"),
+]
+
+# Official BG3 languages (marked for priority sorting)
+OFFICIAL_BG3_LANGUAGES = {"en", "zh", "ko", "ja", "ru", "pl", "de", "fr", "es", "es_mx", "pt_br", "it", "tr", "zh_tw"}
+
+
+@dataclass
+class AppSettings:
+    """Application settings."""
+    # General
+    language: str = "en"
+    theme: str = "system"  # light, dark, system
+    auto_save: bool = True
+    auto_save_interval: int = 30  # seconds
+
+    # Translation
+    default_provider: str = "gemini"
+    providers: Dict[str, TranslationProviderConfig] = field(default_factory=dict)
+    batch_size: int = 50
+    max_concurrent_requests: int = 3
+    retry_attempts: int = 3
+    timeout: int = 60
+
+    # Dictionary/Cache
+    use_dictionary: bool = True
+    dictionary_match_threshold: float = 0.85
+    cache_translations: bool = True
+
+    # Validation
+    validate_placeholders: bool = True
+    validate_terminology: bool = True
+    strict_mode: bool = False
+
+    # Export
+    export_format: str = "pak"  # pak, xml, zip
+    include_original: bool = False
+    create_backup: bool = True
+
+    # Advanced
+    log_level: str = "INFO"
+    debug_mode: bool = False
+
+    @classmethod
+    def load(cls, path: Path) -> "AppSettings":
+        if path.exists():
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                settings = cls()
+                for key, value in data.items():
+                    if hasattr(settings, key):
+                        if key == "providers":
+                            settings.providers = {
+                                k: TranslationProviderConfig(**v) for k, v in value.items()
+                            }
+                        else:
+                            setattr(settings, key, value)
+                return settings
+            except Exception:
+                pass
+        return cls()
+
+    def save(self, path: Path):
+        data = {}
+        for key in self.__dataclass_fields__:
+            value = getattr(self, key)
+            if key == "providers":
+                data[key] = {k: v.__dict__ for k, v in value.items()}
+            else:
+                data[key] = value
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+# Global instances
+PATHS = AppPaths()
+SETTINGS_FILE = PATHS.data_dir / "settings.json"
+
+
+def get_settings() -> AppSettings:
+    """Get application settings singleton."""
+    return AppSettings.load(SETTINGS_FILE)
+
+
+def save_settings(settings: AppSettings):
+    """Save application settings."""
+    settings.save(SETTINGS_FILE)
+===== src/bg3_translator/ui/theme.py (379 lines) =====
+"""Design system: dark "gaming / AI" palette + QSS stylesheet."""
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Palette:
+    bg: str
+    bg_elevated: str
+    surface: str
+    surface_alt: str
+    border: str
+    border_strong: str
+    text: str
+    text_muted: str
+    accent: str
+    accent_hover: str
+    accent_pressed: str
+    accent_text: str
+    accent_soft: str
+    danger: str
+    danger_hover: str
+    success: str
+    warning: str
+    info: str
+
+
+# Premium dark: near-black graphite with a deep red accent.
+DARK = Palette(
+    bg="#0c0d10",
+    bg_elevated="#12141a",
+    surface="#16181f",
+    surface_alt="#1e212b",
+    border="#262a35",
+    border_strong="#333846",
+    text="#eef1f6",
+    text_muted="#8b93a4",
+    accent="#e5323d",
+    accent_hover="#f2454f",
+    accent_pressed="#c11e28",
+    accent_text="#ffffff",
+    accent_soft="rgba(229,50,61,0.14)",
+    danger="#e5323d",
+    danger_hover="#f2454f",
+    success="#2fbf71",
+    warning="#e8a33d",
+    info="#4f8cff",
+)
+
+# Keep a light fallback (rarely used; app defaults to dark).
+LIGHT = Palette(
+    bg="#f4f5f7",
+    bg_elevated="#ffffff",
+    surface="#ffffff",
+    surface_alt="#eef0f4",
+    border="#dfe3e8",
+    border_strong="#c9cfd8",
+    text="#16181f",
+    text_muted="#5c6472",
+    accent="#c81e2b",
+    accent_hover="#e5323d",
+    accent_pressed="#a11621",
+    accent_text="#ffffff",
+    accent_soft="rgba(200,30,43,0.12)",
+    danger="#c81e2b",
+    danger_hover="#e5323d",
+    success="#1f9d55",
+    warning="#c67c12",
+    info="#2563eb",
+)
+
+# App default theme.
+DEFAULT = DARK
+
+FONT_FAMILY = "Segoe UI"
+FONT_SIZE = 13
+
+
+
+def build_stylesheet(p: Palette) -> str:
+    return f"""
+* {{ font-family: "{FONT_FAMILY}"; font-size: {FONT_SIZE}px; }}
+QMainWindow, QDialog {{ background: {p.bg}; }}
+QWidget {{ color: {p.text}; }}
+
+/* ---------- App title bar / hero ---------- */
+#AppName {{ font-size: 17px; font-weight: 800; color: {p.text}; }}
+#AppNameAccent {{ color: {p.accent}; }}
+#HeroGradient {{
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+        stop:0 {p.bg_elevated}, stop:1 {p.surface});
+    border: 1px solid {p.border};
+    border-radius: 16px;
+}}
+
+/* ---------- Sidebar ---------- */
+#Sidebar {{
+    background: {p.bg_elevated};
+    border-right: 1px solid {p.border};
+}}
+#SidebarBrand {{ padding: 4px 6px; }}
+#NavButton {{
+    background: transparent;
+    border: none;
+    border-radius: 10px;
+    padding: 11px 14px;
+    text-align: left;
+    color: {p.text_muted};
+    font-size: 14px;
+}}
+#NavButton:hover {{ background: {p.surface_alt}; color: {p.text}; }}
+#NavButton:checked {{
+    background: {p.accent_soft};
+    color: {p.accent};
+    font-weight: 700;
+    border-left: 3px solid {p.accent};
+}}
+
+/* ---------- Buttons ---------- */
+QPushButton {{
+    background: {p.surface_alt};
+    border: 1px solid {p.border};
+    border-radius: 9px;
+    padding: 8px 16px;
+    color: {p.text};
+}}
+QPushButton:hover {{ background: {p.border}; border-color: {p.border_strong}; }}
+QPushButton:pressed {{ background: {p.surface_alt}; }}
+QPushButton:disabled {{ color: {p.text_muted}; border-color: {p.border}; background: {p.surface}; }}
+QPushButton#Primary {{
+    background: {p.accent};
+    color: {p.accent_text};
+    border: none;
+    font-weight: 700;
+    padding: 11px 22px;
+    border-radius: 10px;
+}}
+QPushButton#Primary:hover {{ background: {p.accent_hover}; }}
+QPushButton#Primary:pressed {{ background: {p.accent_pressed}; }}
+QPushButton#Primary:disabled {{ background: {p.surface_alt}; color: {p.text_muted}; }}
+QPushButton#Danger {{
+    background: {p.danger};
+    color: #ffffff;
+    border: none;
+    font-weight: 700;
+}}
+QPushButton#Danger:hover {{ background: {p.danger_hover}; }}
+QPushButton#Ghost {{
+    background: transparent;
+    border: 1px solid {p.border};
+}}
+QPushButton#Ghost:hover {{ background: {p.surface_alt}; }}
+
+/* ---------- Cards / panels ---------- */
+#Card {{
+    background: {p.surface};
+    border: 1px solid {p.border};
+    border-radius: 14px;
+}}
+#CardFlat {{
+    background: {p.surface};
+    border: 1px solid {p.border};
+    border-radius: 12px;
+}}
+#Title {{ font-size: 20px; font-weight: 800; }}
+#SectionTitle {{ font-size: 15px; font-weight: 700; }}
+#Subtitle {{ color: {p.text_muted}; }}
+#StatValue {{ font-size: 28px; font-weight: 800; color: {p.text}; }}
+#StatLabel {{ color: {p.text_muted}; font-size: 12px; }}
+#Pill {{
+    background: {p.surface_alt};
+    border: 1px solid {p.border};
+    border-radius: 11px;
+    padding: 6px 12px;
+    color: {p.text};
+}}
+#PillAccent {{ background: {p.accent_soft}; border: 1px solid {p.accent}; color: {p.accent}; }}
+
+/* ---------- Inputs ---------- */
+QLineEdit, QTextEdit, QPlainTextEdit, QSpinBox, QComboBox {{
+    background: {p.surface};
+    border: 1px solid {p.border};
+    border-radius: 9px;
+    padding: 8px 11px;
+    selection-background-color: {p.accent};
+    color: {p.text};
+}}
+QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus, QComboBox:focus {{
+    border: 1px solid {p.accent};
+}}
+QComboBox::drop-down {{ border: none; width: 26px; }}
+QComboBox QAbstractItemView {{
+    background: {p.surface};
+    border: 1px solid {p.border};
+    selection-background-color: {p.accent};
+    selection-color: {p.accent_text};
+}}
+QCheckBox::indicator, QRadioButton::indicator {{ width: 16px; height: 16px; }}
+
+/* ---------- Table ---------- */
+QTableWidget {{
+    background: {p.surface};
+    border: 1px solid {p.border};
+    border-radius: 12px;
+    gridline-color: {p.border};
+}}
+QTableWidget::item {{ padding: 7px; }}
+QTableWidget::item:selected {{ background: {p.accent_soft}; color: {p.text}; }}
+QHeaderView::section {{
+    background: {p.bg_elevated};
+    border: none;
+    border-bottom: 1px solid {p.border};
+    padding: 9px;
+    font-weight: 700;
+    color: {p.text_muted};
+}}
+
+/* ---------- Progress ---------- */
+QProgressBar {{
+    background: {p.surface_alt};
+    border: none;
+    border-radius: 7px;
+    height: 14px;
+    text-align: center;
+    color: {p.text_muted};
+    font-size: 11px;
+}}
+QProgressBar::chunk {{ background: {p.accent}; border-radius: 7px; }}
+
+/* ---------- Scrollbars ---------- */
+QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
+QScrollBar::handle:vertical {{ background: {p.border}; border-radius: 5px; min-height: 32px; }}
+QScrollBar::handle:vertical:hover {{ background: {p.text_muted}; }}
+QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; }}
+QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
+QScrollBar:horizontal {{ background: transparent; height: 10px; margin: 2px; }}
+QScrollBar::handle:horizontal {{ background: {p.border}; border-radius: 5px; min-width: 32px; }}
+QScrollBar::handle:horizontal:hover {{ background: {p.text_muted}; }}
+
+/* ---------- Toast ---------- */
+#Toast {{
+    background: {p.bg_elevated};
+    border: 1px solid {p.border};
+    border-left: 4px solid {p.accent};
+    border-radius: 10px;
+    padding: 13px 17px;
+    color: {p.text};
+}}
+#ToastSuccess {{ border-left-color: {p.success}; }}
+#ToastError {{ border-left-color: {p.danger}; }}
+#ToastWarning {{ border-left-color: {p.warning}; }}
+"""
+
+
+/* ---------- Sidebar ---------- */
+#Sidebar {{
+    background: {p.surface};
+    border-right: 1px solid {p.border};
+}}
+#NavButton {{
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 14px;
+    text-align: left;
+    color: {p.text_muted};
+}}
+#NavButton:hover {{ background: {p.surface_alt}; color: {p.text}; }}
+#NavButton:checked {{
+    background: {p.accent}1a;
+    color: {p.accent};
+    font-weight: 600;
+}}
+
+/* ---------- Buttons ---------- */
+QPushButton {{
+    background: {p.surface_alt};
+    border: 1px solid {p.border};
+    border-radius: 8px;
+    padding: 8px 16px;
+}}
+QPushButton:hover {{ background: {p.border}; }}
+QPushButton:pressed {{ background: {p.surface_alt}; }}
+QPushButton:disabled {{ color: {p.text_muted}; opacity: 0.5; }}
+QPushButton#Primary {{
+    background: {p.accent};
+    color: {p.accent_text};
+    border: none;
+    font-weight: 600;
+    padding: 9px 20px;
+}}
+QPushButton#Primary:hover {{ background: {p.accent_hover}; }}
+QPushButton#Primary:disabled {{ background: {p.surface_alt}; color: {p.text_muted}; }}
+QPushButton#Danger {{
+    background: {p.error};
+    color: #ffffff;
+    border: none;
+    font-weight: 600;
+}}
+
+/* ---------- Cards / panels ---------- */
+#Card {{
+    background: {p.surface};
+    border: 1px solid {p.border};
+    border-radius: 12px;
+}}
+#Title {{ font-size: 18px; font-weight: 700; }}
+#Subtitle {{ color: {p.text_muted}; }}
+#StatValue {{ font-size: 26px; font-weight: 700; }}
+#StatLabel {{ color: {p.text_muted}; font-size: 12px; }}
+
+/* ---------- Inputs ---------- */
+QLineEdit, QTextEdit, QPlainTextEdit, QSpinBox, QComboBox {{
+    background: {p.surface};
+    border: 1px solid {p.border};
+    border-radius: 8px;
+    padding: 7px 10px;
+    selection-background-color: {p.accent};
+}}
+QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus, QComboBox:focus {{
+    border: 1px solid {p.accent};
+}}
+QComboBox::drop-down {{ border: none; width: 24px; }}
+QComboBox QAbstractItemView {{
+    background: {p.surface};
+    border: 1px solid {p.border};
+    selection-background-color: {p.accent}33;
+}}
+
+/* ---------- Table ---------- */
+QTableWidget {{
+    background: {p.surface};
+    border: 1px solid {p.border};
+    border-radius: 10px;
+    gridline-color: {p.border};
+}}
+QTableWidget::item {{ padding: 6px; }}
+QTableWidget::item:selected {{ background: {p.accent}22; color: {p.text}; }}
+QHeaderView::section {{
+    background: {p.surface_alt};
+    border: none;
+    border-bottom: 1px solid {p.border};
+    padding: 8px;
+    font-weight: 600;
+    color: {p.text_muted};
+}}
+
+/* ---------- Progress ---------- */
+QProgressBar {{
+    background: {p.surface_alt};
+    border: none;
+    border-radius: 6px;
+    height: 12px;
+    text-align: center;
+}}
+QProgressBar::chunk {{ background: {p.accent}; border-radius: 6px; }}
+
+/* ---------- Scrollbars ---------- */
+QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
+QScrollBar::handle:vertical {{
+    background: {p.border}; border-radius: 4px; min-height: 30px;
+}}
+QScrollBar::handle:vertical:hover {{ background: {p.text_muted}; }}
+QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; }}
+QScrollBar:horizontal {{ background: transparent; height: 10px; margin: 2px; }}
+QScrollBar::handle:horizontal {{ background: {p.border}; border-radius: 4px; min-width: 30px; }}
+
+/* ---------- Toast ---------- */
+#Toast {{
+    background: {p.surface};
+    border: 1px solid {p.border};
+    border-left: 4px solid {p.accent};
+    border-radius: 8px;
+    padding: 12px 16px;
+}}
+#ToastSuccess {{ border-left-color: {p.success}; }}
+#ToastError {{ border-left-color: {p.error}; }}
+#ToastWarning {{ border-left-color: {p.warning}; }}
+"""
+===== src/bg3_translator/ui/widgets.py (97 lines) =====
+"""Reusable UI components: cards, buttons, toast notifications, stat tiles."""
+
+from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, Signal
+from PySide6.QtGui import QFont
+from PySide6.QtWidgets import (
+    QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget, QGraphicsDropShadowEffect,
+)
+
+
+class Card(QFrame):
+    """Rounded panel container (#Card)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("Card")
+
+
+class StatTile(Card):
+    """Single statistic: big value + label."""
+
+    def __init__(self, label: str, value: str = "0", parent=None):
+        super().__init__(parent)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(20, 16, 20, 16)
+        self.value_label = QLabel(value)
+        self.value_label.setObjectName("StatValue")
+        self.text_label = QLabel(label)
+        self.text_label.setObjectName("StatLabel")
+        lay.addWidget(self.value_label)
+        lay.addWidget(self.text_label)
+
+    def set_value(self, value: str):
+        self.value_label.setText(value)
+
+
+class PrimaryButton(QPushButton):
+    """Accent-filled primary action button."""
+
+    def __init__(self, text: str, parent=None):
+        super().__init__(text, parent)
+        self.setObjectName("Primary")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setMinimumHeight(38)
+
+
+class DangerButton(QPushButton):
+    """Red destructive-action button."""
+
+    def __init__(self, text: str, parent=None):
+        super().__init__(text, parent)
+        self.setObjectName("Danger")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+
+class Toast(QFrame):
+    """Floating notification, auto-dismisses."""
+
+    CLOSED = Signal()
+
+    def __init__(self, message: str, kind: str = "info", timeout_ms: int = 3500, parent=None):
+        super().__init__(parent)
+        self.setObjectName("Toast")
+        if kind == "success":
+            self.setProperty("class", "ToastSuccess")
+            self.setObjectName("ToastSuccess")
+        elif kind == "error":
+            self.setObjectName("ToastError")
+        elif kind == "warning":
+            self.setObjectName("ToastWarning")
+
+        icons = {"info": "ℹ", "success": "✔", "error": "✖", "warning": "⚠"}
+        lay = QHBoxLayout(self)
+        icon = QLabel(icons.get(kind, "ℹ"))
+        icon.setFont(QFont("Segoe UI Emoji", 14))
+        msg = QLabel(message)
+        msg.setWordWrap(True)
+        lay.addWidget(icon)
+        lay.addWidget(msg, 1)
+
+        self.setFixedWidth(380)
+        self.setMinimumHeight(48)
+
+        shadow = QGraphicsDropShadowEffect(blurRadius=24, xOffset=0, yOffset=6)
+        shadow.setColor(self.palette().color(self.palette().ColorRole.Shadow))
+        self.setGraphicsEffect(shadow)
+
+        self.timer = QTimer(self)
+        self.timer.setSingleShot(True)
+        self.timer.timeout.connect(self._close)
+        self.timer.start(timeout_ms)
+
+    def _close(self):
+        self.CLOSED.emit()
+        self.deleteLater()
+
+    def set_timeout(self, ms: int):
+        self.timer.start(ms)
+===== src/bg3_translator/ui/state.py (87 lines) =====
+"""Shared application state (current project, services)."""
+
+from typing import Optional
+
+from PySide6.QtCore import QObject, Signal
+
+from ..config import PATHS, get_settings
+from ..models.translation import TranslationEntry, TranslationProject, ModMetadata
+from ..services.dictionary import DictionaryStore
+from ..services.engine import TranslationEngine
+from ..services.providers import get_provider
+
+
+class AppState(QObject):
+    """Application-wide state, shared between pages via MainWindow."""
+
+    project_changed = Signal()
+    entry_edited = Signal(str)  # handle
+
+    def __init__(self):
+        super().__init__()
+        self.settings = get_settings()
+        self.dictionary = DictionaryStore(PATHS.cache_dir / "dictionary.db")
+        self.project: Optional[TranslationProject] = None
+        self._engine: Optional[TranslationEngine] = None
+
+    def _build_provider(self):
+        prov_cfg = self.settings.providers.get(self.settings.default_provider)
+        try:
+            return get_provider(
+                self.settings.default_provider,
+                api_key=prov_cfg.api_key if prov_cfg else "",
+                model=prov_cfg.model if prov_cfg else "",
+                base_url=prov_cfg.base_url if prov_cfg else "",
+                timeout=self.settings.timeout,
+            )
+        except Exception:
+            return None
+
+    @property
+    def engine(self) -> TranslationEngine:
+        if self._engine is None:
+            self._engine = TranslationEngine(self.dictionary, provider=self._build_provider())
+        return self._engine
+
+    def reset_engine(self):
+        """Rebuild the provider in-place, keeping the same engine object so UI
+        signal connections stay valid (avoids disconnect warnings)."""
+        if self._engine is None:
+            self._engine = TranslationEngine(self.dictionary, provider=self._build_provider())
+        else:
+            self._engine.set_provider(self._build_provider())
+
+    def new_project(self, metadata: ModMetadata, entries: list[TranslationEntry],
+                    source_lang: str, target_lang: str):
+        self.project = TranslationProject(
+            metadata=metadata,
+            entries=entries,
+            source_language=source_lang,
+            target_language=target_lang,
+        )
+        self.project_changed.emit()
+
+    def close_project(self):
+        self.project = None
+        self.project_changed.emit()
+
+    def stats(self) -> dict:
+        if not self.project:
+            return {"total": 0, "translated": 0, "percent": 0, "errors": 0}
+        p = self.project
+        return {
+            "total": p.total_entries,
+            "translated": p.translated_entries,
+            "percent": int(p.get_progress() * 100),
+            "errors": sum(1 for e in p.entries if e.has_validation_errors()),
+        }
+
+
+_app_state: Optional[AppState] = None
+
+
+def get_app_state() -> AppState:
+    global _app_state
+    if _app_state is None:
+        _app_state = AppState()
+    return _app_state
+===== src/bg3_translator/ui/main_window.py (138 lines) =====
+"""Main application window with sidebar navigation."""
+
+from PySide6.QtCore import Qt, QSize
+from PySide6.QtWidgets import (
+    QApplication, QButtonGroup, QHBoxLayout, QLabel, QMainWindow,
+    QPushButton, QStackedWidget, QVBoxLayout, QWidget, QFrame,
+)
+
+from .theme import DARK, LIGHT, build_stylesheet
+from .widgets import Toast
+from ..config import get_settings
+
+
+class MainWindow(QMainWindow):
+    """Shell window: left sidebar nav + stacked pages + toast host."""
+
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("BG3 Mod Translator")
+        self.setMinimumSize(QSize(1100, 720))
+        self.resize(1280, 800)
+
+        self.settings = get_settings()
+        self._apply_theme(self.settings.theme)
+
+        root = QWidget()
+        root_lay = QHBoxLayout(root)
+        root_lay.setContentsMargins(0, 0, 0, 0)
+        root_lay.setSpacing(0)
+        self.setCentralWidget(root)
+
+        # --- Sidebar ---
+        self.sidebar = QFrame()
+        self.sidebar.setObjectName("Sidebar")
+        self.sidebar.setFixedWidth(220)
+        side_lay = QVBoxLayout(self.sidebar)
+        side_lay.setContentsMargins(12, 20, 12, 20)
+        side_lay.setSpacing(4)
+
+        logo = QLabel("BG3 Mod Translator")
+        logo.setObjectName("Title")
+        logo.setWordWrap(True)
+        side_lay.addWidget(logo)
+        subtitle = QLabel("v2.0 · Локализация модов")
+        subtitle.setObjectName("Subtitle")
+        side_lay.addWidget(subtitle)
+        side_lay.addSpacing(24)
+
+        self.nav_group = QButtonGroup(self)
+        self.nav_group.setExclusive(True)
+        self._nav_buttons: list[QPushButton] = []
+
+        # Pages registered here: (key, label, widget_factory)
+        from .pages.dashboard import DashboardPage
+        from .pages.editor import EditorPage
+        from .pages.dictionary_page import DictionaryPage
+        from .pages.settings_page import SettingsPage
+
+        self.stack = QStackedWidget()
+        self.pages: dict[str, QWidget] = {}
+
+        page_defs = [
+            ("dashboard", "🏠  Главная", DashboardPage(self)),
+            ("editor", "📝  Перевод", EditorPage(self)),
+            ("dictionary", "📚  Словарь", DictionaryPage(self)),
+            ("settings", "⚙  Настройки", SettingsPage(self)),
+        ]
+        for key, label, widget in page_defs:
+            btn = QPushButton(label)
+            btn.setObjectName("NavButton")
+            btn.setCheckable(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setFixedHeight(40)
+            self.nav_group.addButton(btn)
+            self._nav_buttons.append(btn)
+            side_lay.addWidget(btn)
+            self.pages[key] = widget
+            self.stack.addWidget(widget)
+
+        self.nav_group.idClicked.connect(self._on_nav)
+        side_lay.addStretch(1)
+
+        root_lay.addWidget(self.sidebar)
+        root_lay.addWidget(self.stack, 1)
+
+        # --- Status bar (bottom) ---
+        self.statusBar().setObjectName("StatusBar")
+        self.statusBar().setSizeGripEnabled(False)
+        self._status_label = QLabel("Готово")
+        self._status_label.setObjectName("Subtitle")
+        self.statusBar().addWidget(self._status_label)
+
+        # Select dashboard
+        self._nav_buttons[0].setChecked(True)
+
+        # Toast overlay
+        self._toast_host = QWidget(self)
+        toast_lay = QVBoxLayout(self._toast_host)
+        toast_lay.setContentsMargins(0, 0, 24, 24)
+        toast_lay.addStretch(1)
+        self._toast_host.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._toast_host.raise_()
+
+    def _on_nav(self, button_id: int):
+        btn = self.nav_group.button(button_id)
+        idx = self._nav_buttons.index(btn)
+        self.stack.setCurrentIndex(idx)
+
+    def navigate(self, page_key: str):
+        keys = list(self.pages.keys())
+        idx = keys.index(page_key)
+        self._nav_buttons[idx].setChecked(True)
+        self.stack.setCurrentIndex(idx)
+
+    def set_status(self, text: str):
+        """Update the bottom status bar text."""
+        self._status_label.setText(text)
+
+    def toast(self, message: str, kind: str = "info", timeout_ms: int = 3500):
+        """Show a floating toast notification."""
+        t = Toast(message, kind, timeout_ms, parent=self._toast_host)
+        lay: QVBoxLayout = self._toast_host.layout()
+        lay.addWidget(t, alignment=Qt.AlignmentFlag.AlignRight)
+        t.CLOSED.connect(lambda: lay.removeWidget(t))
+        t.show()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._toast_host.setGeometry(self.rect())
+
+    def _apply_theme(self, theme: str):
+        import sys
+        pal = DARK if theme == "dark" else LIGHT
+        if theme == "system":
+            pal = DARK if sys.platform == "win32" and QApplication.instance().styleHints().colorScheme() == Qt.ColorScheme.Dark else LIGHT
+        app = QApplication.instance()
+        if app:
+            app.setStyleSheet(build_stylesheet(pal))
+===== src/bg3_translator/ui/pages/editor.py (428 lines) =====
+"""Translation editor page + mod import worker."""
+
+import zipfile
+from pathlib import Path
+
+from PySide6.QtCore import Qt, QObject, Signal
+from PySide6.QtWidgets import (
+    QComboBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QTableWidget,
+    QTableWidgetItem, QVBoxLayout, QWidget, QProgressBar, QHeaderView,
+    QAbstractItemView,
+)
+
+from ..state import get_app_state
+from ..widgets import Card, PrimaryButton
+from ...core.locaxml import parse_loca_xml, loca_to_entries
+from ...models.translation import ModMetadata, TranslationProject, TranslationStatus
+
+
+class ImportWorker(QObject):
+    """Background import: reads .xml/.pak/.zip/folder, returns a project.
+
+    Note: full .pak (LSPK v18) decompression is handled by core.pak (M6).
+    This worker supports .xml and .zip (containing .xml) and folders now;
+    .pak falls back to scanning for nested XMLs after extraction attempt.
+    """
+
+    finished = Signal(object)   # TranslationProject
+    failed = Signal(str)
+
+    def __init__(self, path: str, is_folder: bool, source_lang: str, target_lang: str):
+        super().__init__()
+        self.path = path
+        self.is_folder = is_folder
+        self.source_lang = source_lang
+        self.target_lang = target_lang
+
+    def run(self):
+        try:
+            project = self._import()
+            self.finished.emit(project)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+    def _import(self) -> TranslationProject:
+        import tempfile
+        p = Path(self.path)
+        xml_files: list[Path] = []
+        temp_dir = None
+
+        if self.is_folder or p.is_dir():
+            xml_files = self._find_xmls(p)
+        elif p.suffix.lower() == ".xml":
+            xml_files = [p]
+        elif p.suffix.lower() == ".zip":
+            temp_dir = Path(tempfile.mkdtemp(prefix="bg3mt_"))
+            with zipfile.ZipFile(p, "r") as zf:
+                zf.extractall(temp_dir)
+            xml_files = self._find_xmls(temp_dir)
+        elif p.suffix.lower() == ".pak":
+            from ...core.pak import extract_pak, PakError
+            temp_dir = Path(tempfile.mkdtemp(prefix="bg3mt_pak_"))
+            try:
+                extract_pak(p, temp_dir)
+            except PakError as exc:
+                raise RuntimeError(f"Не удалось прочитать пакет: {exc}") from exc
+            xml_files = self._find_xmls(temp_dir)
+        else:
+            raise RuntimeError(f"Неподдерживаемый тип файла: {p.suffix}")
+
+        if not xml_files:
+            raise RuntimeError("В источнике не найдено файлов локализации (XML)")
+
+        entries = []
+        for xf in xml_files:
+            text = xf.read_text(encoding="utf-8", errors="replace")
+            parsed = parse_loca_xml(text)
+            entries.extend(loca_to_entries(parsed, self.source_lang, self.target_lang))
+
+        if not entries:
+            raise RuntimeError("Файлы локализации не содержат строк")
+
+        metadata = ModMetadata(
+            name=p.stem,
+            source_path=p,
+            supported_languages=[self.target_lang],
+        )
+        return TranslationProject(
+            metadata=metadata,
+            entries=entries,
+            source_language=self.source_lang,
+            target_language=self.target_lang,
+        )
+
+    @staticmethod
+    def _find_xmls(root: Path) -> list[Path]:
+        result = []
+        for pattern in ("**/*.xml", "**/*.loc"):
+            result.extend(root.glob(pattern))
+        # Prefer files under Localization folders first
+        result.sort(key=lambda x: (0 if "localization" in str(x).lower() else 1, str(x)))
+        return result
+
+
+class EditorPage(QWidget):
+    """Side-by-side translation table with search, filter, batch translate."""
+
+    COL_STATUS, COL_SRC, COL_TGT = 0, 1, 2
+
+    def __init__(self, main_window):
+        super().__init__()
+        self.main = main_window
+        self.state = get_app_state()
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(32, 28, 32, 28)
+        lay.setSpacing(14)
+
+        header = QLabel("Перевод")
+        header.setObjectName("Title")
+        lay.addWidget(header)
+
+        bar = QHBoxLayout()
+        bar.setSpacing(10)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Поиск по исходному тексту или переводу…")
+        self.search.setClearButtonEnabled(True)
+        self.search.textChanged.connect(self._apply_filter)
+        bar.addWidget(self.search, 1)
+
+        self.filter_box = QComboBox()
+        self.filter_box.addItem("Все", "all")
+        self.filter_box.addItem("Не переведено", "untranslated")
+        self.filter_box.addItem("Переведено", "translated")
+        self.filter_box.addItem("С ошибками", "errors")
+        self.filter_box.currentIndexChanged.connect(self._apply_filter)
+        bar.addWidget(self.filter_box)
+
+        self.translate_btn = PrimaryButton("Перевести всё")
+        self.translate_btn.clicked.connect(self._translate_all)
+        bar.addWidget(self.translate_btn)
+
+        self.cancel_btn = PrimaryButton("Остановить")
+        self.cancel_btn.clicked.connect(self._cancel_translate)
+        self.cancel_btn.setVisible(False)
+        bar.addWidget(self.cancel_btn)
+
+        self.export_btn = PrimaryButton("Экспорт…")
+        self.export_btn.clicked.connect(self._export)
+        bar.addWidget(self.export_btn)
+        lay.addLayout(bar)
+
+        self.progress = QProgressBar()
+        self.progress.setVisible(False)
+        lay.addWidget(self.progress)
+
+        self.table = QTableWidget(0, 3)
+        self.table.setHorizontalHeaderLabels(["Статус", "Исходный текст", "Перевод"])
+        self.table.verticalHeader().setVisible(False)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked
+                                   | QAbstractItemView.EditTrigger.SelectedClicked)
+        hdr = self.table.horizontalHeader()
+        hdr.setSectionResizeMode(self.COL_STATUS, QHeaderView.ResizeMode.Fixed)
+        hdr.setSectionResizeMode(self.COL_SRC, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(self.COL_TGT, QHeaderView.ResizeMode.Stretch)
+        self.table.setColumnWidth(self.COL_STATUS, 110)
+        self.table.itemChanged.connect(self._on_item_changed)
+        lay.addWidget(self.table, 1)
+
+        self.empty_label = QLabel("Проект не загружен.\nОткройте мод на главном экране, чтобы начать.")
+        self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_label.setObjectName("Subtitle")
+        lay.addWidget(self.empty_label, 1)
+
+        self.state.project_changed.connect(self.reload)
+        self._connect_engine()
+        self.reload()
+
+    def _connect_engine(self):
+        """Connect engine signals once. The engine object is stable (its provider
+        is swapped in-place on settings change), so these connections stay valid
+        for the whole session and never need disconnecting."""
+        engine = self.state.engine
+        engine.progress.connect(self._on_translate_progress)
+        engine.stage.connect(self._on_translate_stage)
+        engine.finished.connect(self._on_translate_finished)
+        engine.error.connect(self._on_translate_error)
+        engine.cancelled.connect(self._on_translate_cancelled)
+
+    # ---------- data loading ----------
+    def reload(self):
+        project = self.state.project
+        self.table.setRowCount(0)
+        has = project is not None and bool(project.entries)
+        self.table.setVisible(has)
+        self.empty_label.setVisible(not has)
+        self.translate_btn.setEnabled(has)
+        self.export_btn.setEnabled(has)
+        if not has:
+            return
+        entries = project.entries
+        self.table.setSortingEnabled(False)
+        self.table.setRowCount(len(entries))
+        for row, e in enumerate(entries):
+            status_item = QTableWidgetItem(self._status_label(e.status))
+            status_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            src_item = QTableWidgetItem(e.source_text)
+            src_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            tgt_item = QTableWidgetItem(e.target_text)
+            tgt_item.setData(Qt.ItemDataRole.UserRole, e.handle)
+            self.table.setItem(row, self.COL_STATUS, status_item)
+            self.table.setItem(row, self.COL_SRC, src_item)
+            self.table.setItem(row, self.COL_TGT, tgt_item)
+        self.table.setSortingEnabled(True)
+
+    @staticmethod
+    def _status_label(status: TranslationStatus) -> str:
+        return {
+            TranslationStatus.NEW: "○ Новый",
+            TranslationStatus.TRANSLATED: "● Переведено",
+            TranslationStatus.DICTIONARY_MATCH: "◆ Словарь",
+            TranslationStatus.AUTO_TRANSLATED: "▲ AI",
+            TranslationStatus.NEEDS_REVIEW: "⚑ Проверка",
+            TranslationStatus.APPROVED: "✔ Готово",
+            TranslationStatus.LOCKED: "Закрыто",
+        }.get(status, status.value)
+
+    # ---------- editing ----------
+    def _on_item_changed(self, item: QTableWidgetItem):
+        if item.column() != self.COL_TGT:
+            return
+        handle = item.data(Qt.ItemDataRole.UserRole)
+        project = self.state.project
+        if not project or not handle:
+            return
+        for e in project.entries:
+            if e.handle == handle:
+                new_text = item.text()
+                if new_text != e.target_text:
+                    e.target_text = new_text
+                    e.status = (TranslationStatus.TRANSLATED if new_text.strip()
+                                else TranslationStatus.NEW)
+                    e.update_timestamps()
+                    from ...core.validation import compare_placeholders
+                    errs, warns = compare_placeholders(e.source_text, new_text)
+                    e.validation_errors = errs
+                    e.validation_warnings = warns
+                    project.update_stats()
+                    self.state.entry_edited.emit(handle)
+                break
+
+    # ---------- filtering ----------
+    def _apply_filter(self):
+        project = self.state.project
+        if not project:
+            return
+        needle = self.search.text().lower()
+        mode = self.filter_box.currentData()
+        by_handle = {e.handle: e for e in project.entries}
+        for row in range(self.table.rowCount()):
+            src = self.table.item(row, self.COL_SRC).text().lower()
+            tgt = self.table.item(row, self.COL_TGT).text().lower()
+            handle = self.table.item(row, self.COL_TGT).data(Qt.ItemDataRole.UserRole)
+            entry = by_handle.get(handle)
+            match_text = (not needle) or (needle in src) or (needle in tgt)
+            match_mode = True
+            if mode == "untranslated":
+                match_mode = bool(entry) and not entry.is_translated()
+            elif mode == "translated":
+                match_mode = bool(entry) and entry.is_translated()
+            elif mode == "errors":
+                match_mode = bool(entry and entry.has_validation_errors())
+            self.table.setRowHidden(row, not (match_text and match_mode))
+
+    # ---------- batch translate (async, UI never freezes) ----------
+    def _translate_all(self):
+        project = self.state.project
+        if not project:
+            return
+        targets = project.get_untranslated()
+        if not targets:
+            self.main.toast("Нечего переводить — все строки уже готовы.", "info")
+            return
+        if self.state.engine.provider is None:
+            self.main.toast(
+                "Провайдер перевода не настроен. Будут использованы только совпадения "
+                "из словаря. Настройте провайдера в разделе «Настройки».", "warning", 5000
+            )
+
+        # Run the whole loop in the engine's worker thread. Only Qt signals
+        # (queued to the main thread) update the UI, so the window never freezes
+        # even if a single Gemini call takes many seconds. Signals are connected
+        # once in __init__, so nothing to wire up here.
+        engine = self.state.engine
+
+        self.progress.setVisible(True)
+        self.progress.setMaximum(len(targets))
+        self.progress.setValue(0)
+        self.translate_btn.setEnabled(False)
+        self.cancel_btn.setVisible(True)
+        self.cancel_btn.setEnabled(True)
+
+        # Wrap only the untranslated entries; the engine mutates them in place,
+        # so the live project objects are updated directly.
+        sub = TranslationProject(
+            metadata=project.metadata,
+            entries=list(targets),
+            source_language=project.source_language,
+            target_language=project.target_language,
+        )
+        engine.run_async(sub)
+
+    def _cancel_translate(self):
+        if self.state.engine.is_running():
+            self.cancel_btn.setEnabled(False)
+            self.state.engine.cancel()
+
+    def _on_translate_stage(self, _stage_id, stage_text):
+        self.main.set_status(stage_text)
+
+    def _on_translate_progress(self, pg):
+        self.progress.setMaximum(max(getattr(pg, "total_files", 0), 1))
+        self.progress.setValue(getattr(pg, "processed_files", 0))
+        err = getattr(pg, "failed", 0)
+        skip = getattr(pg, "skipped", 0)
+        done = getattr(pg, "succeeded", 0)
+        self.main.set_status(
+            f"{pg.stage_text} · {done}/{getattr(pg, 'lines_total', 0)} строк"
+            + (f" · ошибок: {err}" if err else "")
+            + (f" · пропущено: {skip}" if skip else "")
+        )
+
+    def _finish_translate(self):
+        self.progress.setVisible(False)
+        self.translate_btn.setEnabled(True)
+        self.cancel_btn.setVisible(False)
+        if self.state.project:
+            self.state.project.update_stats()
+        self.reload()
+
+    def _on_translate_finished(self, _project):
+        self._finish_translate()
+        s = self.state.stats()
+        if s["translated"] == 0 and s["total"] > 0:
+            reason = getattr(self.state.engine, "first_error", None) or (
+                "Не удалось перевести строки. Проверьте провайдера в «Настройках»."
+            )
+            self.main.toast(f"Ни одна строка не переведена. {reason}", "error", 9000)
+            return
+        self.main.toast(
+            f"Перевод завершён: {s['translated']}/{s['total']} строк ({s['percent']}%)",
+            "success", 5000,
+        )
+
+    def _on_translate_error(self, message):
+        self._finish_translate()
+        self.main.toast(message, "error", 6000)
+
+    def _on_translate_cancelled(self):
+        self._finish_translate()
+        self.main.toast("Перевод остановлен пользователем.", "warning")
+        if self.state.project:
+            self.state.project.update_stats()
+        self.reload()
+
+
+    # ---------- export ----------
+    def _export(self):
+        from PySide6.QtWidgets import QFileDialog, QMenu
+        from PySide6.QtCore import QPoint
+
+        project = self.state.project
+        if not project:
+            return
+        menu = QMenu(self)
+        act_xml = menu.addAction("Файл локализации XML (.xml)")
+        act_pak = menu.addAction("Пакет BG3 (.pak)")
+        chosen = menu.exec(self.export_btn.mapToGlobal(QPoint(0, self.export_btn.height())))
+        if chosen is act_xml:
+            self._export_xml()
+        elif chosen is act_pak:
+            self._export_pak()
+
+    def _export_xml(self):
+        from PySide6.QtWidgets import QFileDialog
+        from ...core.locaxml import build_loca_xml
+
+        project = self.state.project
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Экспорт файла локализации XML", f"{project.metadata.name}.xml",
+            "Файл локализации XML (*.xml)"
+        )
+        if not path:
+            return
+        pairs = [
+            (e.handle, e.target_text if e.is_translated() else e.source_text)
+            for e in project.entries
+        ]
+        Path(path).write_text(build_loca_xml(pairs), encoding="utf-8")
+        self.main.toast(f"Экспортировано строк: {len(pairs)} → {Path(path).name}", "success")
+
+    def _export_pak(self):
+        from PySide6.QtWidgets import QFileDialog
+        from ...core.locaxml import build_loca_xml, LocaVersion
+        from ...core.pak import write_pak, PakError
+
+        project = self.state.project
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Экспорт пакета BG3", f"{project.metadata.name}_Local.pak",
+            "Пакет BG3 (*.pak)"
+        )
+        if not path:
+            return
+        pairs = [
+            (e.handle, e.target_text if e.is_translated() else e.source_text)
+            for e in project.entries
+        ]
+        xml_text = build_loca_xml(pairs, source_version=LocaVersion(1, 0, 0, 0))
+        mod_name = project.metadata.name or "Mod"
+        internal = f"Public/{mod_name}/Localization/{mod_name}.loc"
+        try:
+            write_pak(Path(path), {internal: xml_text.encode("utf-8")})
+        except PakError as exc:
+            self.main.toast(f"Не удалось создать пакет: {exc}", "error", 6000)
+            return
+        self.main.toast(
+            f"Пакет создан, строк: {len(pairs)} → {Path(path).name}", "success"
+        )
+===== src/bg3_translator/ui/pages/dashboard.py (169 lines) =====
+"""Dashboard: quick start actions + project stats."""
+
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QFileDialog, QHBoxLayout, QLabel, QComboBox, QVBoxLayout, QWidget, QGridLayout,
+)
+
+from ..state import get_app_state
+from ..widgets import Card, PrimaryButton, StatTile
+from ...config import SUPPORTED_LANGUAGES
+
+
+class DashboardPage(QWidget):
+    """Landing page: open mod, see progress, quick actions."""
+
+    def __init__(self, main_window):
+        super().__init__()
+        self.main = main_window
+        self.state = get_app_state()
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(32, 28, 32, 28)
+        lay.setSpacing(20)
+
+        header = QLabel("Главная")
+        header.setObjectName("Title")
+        lay.addWidget(header)
+
+        # --- Quick start card ---
+        start_card = Card()
+        sc_lay = QVBoxLayout(start_card)
+        sc_lay.setContentsMargins(24, 20, 24, 20)
+        sc_lay.setSpacing(12)
+
+        sc_title = QLabel("Перевести мод")
+        sc_title.setObjectName("Title")
+        sc_lay.addWidget(sc_title)
+        sc_hint = QLabel("Откройте файл мода (.pak, .zip, .xml) или распакованную папку, чтобы начать.")
+        sc_hint.setObjectName("Subtitle")
+        sc_lay.addWidget(sc_hint)
+
+        row = QHBoxLayout()
+        row.setSpacing(12)
+
+        self.source_lang = QComboBox()
+        self.target_lang = QComboBox()
+        for lang in SUPPORTED_LANGUAGES:
+            label = f"{lang.flag_emoji}  {lang.native_name}"
+            self.source_lang.addItem(label, lang.code)
+            self.target_lang.addItem(label, lang.code)
+
+        def _select(lang_box, code, fallback_index):
+            idx = lang_box.findData(code)
+            lang_box.setCurrentIndex(idx if idx >= 0 else fallback_index)
+
+        # defaults en -> ru
+        _select(self.source_lang, "en", 0)
+        _select(self.target_lang, "ru", 0)
+
+        src_lbl = QLabel("С")
+        src_lbl.setObjectName("Subtitle")
+        tgt_lbl = QLabel("На")
+        tgt_lbl.setObjectName("Subtitle")
+        row.addWidget(src_lbl)
+        row.addWidget(self.source_lang)
+        row.addSpacing(12)
+        row.addWidget(tgt_lbl)
+        row.addWidget(self.target_lang)
+        row.addStretch(1)
+
+        self.open_btn = PrimaryButton("Открыть файл мода…")
+        self.open_btn.clicked.connect(self._open_mod)
+        row.addWidget(self.open_btn)
+        self.open_folder_btn = PrimaryButton("Открыть папку…")
+        self.open_folder_btn.clicked.connect(self._open_folder)
+        row.addWidget(self.open_folder_btn)
+
+        sc_lay.addLayout(row)
+        lay.addWidget(start_card)
+
+        # --- Stats grid ---
+        stats_card = Card()
+        stats_lay = QGridLayout(stats_card)
+        stats_lay.setContentsMargins(24, 20, 24, 20)
+        stats_lay.setHorizontalSpacing(16)
+        stats_lay.setVerticalSpacing(16)
+
+        self.stat_total = StatTile("Всего строк")
+        self.stat_translated = StatTile("Переведено")
+        self.stat_progress = StatTile("Прогресс")
+        self.stat_errors = StatTile("Ошибок проверки")
+        stats_lay.addWidget(self.stat_total, 0, 0)
+        stats_lay.addWidget(self.stat_translated, 0, 1)
+        stats_lay.addWidget(self.stat_progress, 0, 2)
+        stats_lay.addWidget(self.stat_errors, 0, 3)
+        lay.addWidget(stats_card)
+
+        # --- Project info ---
+        self.project_info = QLabel("Проект не загружен. Откройте мод, чтобы начать.")
+        self.project_info.setObjectName("Subtitle")
+        self.project_info.setWordWrap(True)
+        lay.addWidget(self.project_info)
+
+        lay.addStretch(1)
+
+        self.state.project_changed.connect(self.refresh)
+        self.refresh()
+
+    def refresh(self):
+        s = self.state.stats()
+        self.stat_total.set_value(str(s["total"]))
+        self.stat_translated.set_value(str(s["translated"]))
+        self.stat_progress.set_value(f"{s['percent']}%")
+        self.stat_errors.set_value(str(s["errors"]))
+        if self.state.project:
+            m = self.state.project.metadata
+            author = m.author or "Автор неизвестен"
+            self.project_info.setText(
+                f"Мод: {m.name}  ·  {author}  ·  версия {m.version}\n"
+                f"{m.source_path}"
+            )
+        else:
+            self.project_info.setText("Проект не загружен. Откройте мод, чтобы начать.")
+
+    def _open_mod(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Открыть файл мода", "",
+            "Файлы модов BG3 (*.pak *.zip *.xml);;Все файлы (*)"
+        )
+        if path:
+            self._start_import(path, is_folder=False)
+
+    def _open_folder(self):
+        path = QFileDialog.getExistingDirectory(self, "Открыть распакованную папку мода")
+        if path:
+            self._start_import(path, is_folder=True)
+
+    def _start_import(self, path: str, is_folder: bool):
+        from .editor import ImportWorker
+        from PySide6.QtCore import QThread
+
+        self.main.toast("Чтение мода…", "info")
+        self.open_btn.setEnabled(False)
+        self.open_folder_btn.setEnabled(False)
+
+        self._thread = QThread()
+        self._worker = ImportWorker(path, is_folder,
+                                    self.source_lang.currentData(),
+                                    self.target_lang.currentData())
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)
+        self._worker.finished.connect(self._on_import_done)
+        self._worker.failed.connect(self._on_import_failed)
+        self._worker.finished.connect(self._thread.quit)
+        self._worker.failed.connect(self._thread.quit)
+        self._thread.start()
+
+    def _on_import_done(self, project):
+        self.state.project = project
+        self.state.project_changed.emit()
+        self.main.toast(f"Загружено строк: {project.total_entries}", "success")
+        self.main.navigate("editor")
+        self.open_btn.setEnabled(True)
+        self.open_folder_btn.setEnabled(True)
+
+    def _on_import_failed(self, error: str):
+        self.main.toast(f"Не удалось импортировать: {error}", "error", 6000)
+        self.open_btn.setEnabled(True)
+        self.open_folder_btn.setEnabled(True)
+===== src/bg3_translator/ui/pages/settings_page.py (167 lines) =====
+"""Settings page: translation providers, theme, validation options."""
+
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QCheckBox, QComboBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
+    QPushButton, QSpinBox, QVBoxLayout, QWidget,
+)
+
+from ..state import get_app_state
+from ..widgets import Card, PrimaryButton
+from ...config import save_settings, TranslationProviderConfig, get_settings
+
+
+class SettingsPage(QWidget):
+    """App settings: provider keys, theme, validation."""
+
+    def __init__(self, main_window):
+        super().__init__()
+        self.main = main_window
+        self.state = get_app_state()
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(32, 28, 32, 28)
+        lay.setSpacing(16)
+
+        header = QLabel("Настройки")
+        header.setObjectName("Title")
+        lay.addWidget(header)
+
+        scroll_host = QWidget()
+        host_lay = QVBoxLayout(scroll_host)
+        host_lay.setContentsMargins(0, 0, 8, 0)
+        host_lay.setSpacing(16)
+
+        # --- Appearance ---
+        theme_card = Card()
+        tc_lay = QFormLayout(theme_card)
+        tc_lay.setContentsMargins(24, 20, 24, 20)
+        tc_lay.setHorizontalSpacing(20)
+        tc_lay.setVerticalSpacing(12)
+        tc_title = QLabel("Оформление")
+        tc_title.setObjectName("Title")
+        tc_lay.addRow(tc_title)
+        self.theme_box = QComboBox()
+        self.theme_box.addItem("Светлая", "light")
+        self.theme_box.addItem("Тёмная", "dark")
+        self.theme_box.addItem("Как в системе", "system")
+        tc_lay.addRow("Тема", self.theme_box)
+        host_lay.addWidget(theme_card)
+
+        # --- Translation provider ---
+        prov_card = Card()
+        pc_lay = QFormLayout(prov_card)
+        pc_lay.setContentsMargins(24, 20, 24, 20)
+        pc_lay.setHorizontalSpacing(20)
+        pc_lay.setVerticalSpacing(12)
+        pc_title = QLabel("Провайдер перевода")
+        pc_title.setObjectName("Title")
+        pc_lay.addRow(pc_title)
+
+        self.provider_box = QComboBox()
+        self.provider_box.addItem("Google Gemini (рекомендуется)", "gemini")
+        self.provider_box.addItem("OpenAI-совместимый (DeepSeek / OpenAI)", "openai_compatible")
+        self.provider_box.addItem("Google Переводчик (бесплатно, нестабильно)", "google_free")
+        self.provider_box.currentIndexChanged.connect(self._on_provider_changed)
+        pc_lay.addRow("Провайдер", self.provider_box)
+
+        hint = QLabel("Gemini — модель ИИ для автоматического перевода текста модов.")
+        hint.setObjectName("Subtitle")
+        hint.setWordWrap(True)
+        pc_lay.addRow("", hint)
+
+        self.api_key = QLineEdit()
+        self.api_key.setPlaceholderText("Ключ API Gemini (обязателен)")
+        self.api_key.setEchoMode(QLineEdit.EchoMode.Password)
+        pc_lay.addRow("Ключ API", self.api_key)
+
+        # Model: dropdown, populated from the API, but still editable
+        self.model = QComboBox()
+        self.model.setEditable(True)
+        self.model.setPlaceholderText("напр. gemini-2.5-flash")
+        model_row = QHBoxLayout()
+        model_row.setSpacing(8)
+        model_row.addWidget(self.model, 1)
+        self.fetch_models_btn = QPushButton("Загрузить модели")
+        self.fetch_models_btn.setToolTip("Запросить список моделей Gemini через API")
+        self.fetch_models_btn.clicked.connect(self._fetch_models)
+        model_row.addWidget(self.fetch_models_btn)
+        model_box = QWidget()
+        model_box.setLayout(model_row)
+        pc_lay.addRow("Модель Gemini", model_box)
+
+        self.base_url = QLineEdit()
+        self.base_url.setPlaceholderText("Базовый URL (пусто = по умолчанию для провайдера)")
+        pc_lay.addRow("Базовый URL", self.base_url)
+
+        self.timeout = QSpinBox()
+        self.timeout.setRange(10, 300)
+        self.timeout.setSuffix(" с")
+        pc_lay.addRow("Тайм-аут", self.timeout)
+        host_lay.addWidget(prov_card)
+
+        # --- Validation ---
+        val_card = Card()
+        vc_lay = QVBoxLayout(val_card)
+        vc_lay.setContentsMargins(24, 20, 24, 20)
+        vc_lay.setSpacing(10)
+        v_title = QLabel("Проверка")
+        v_title.setObjectName("Title")
+        vc_lay.addWidget(v_title)
+        self.check_placeholders = QCheckBox("Проверять плейсхолдеры (LSTag, {0}, &entity;)")
+        self.check_strict = QCheckBox("Строгий режим — отклонять перевод с ошибками плейсхолдеров")
+        vc_lay.addWidget(self.check_placeholders)
+        vc_lay.addWidget(self.check_strict)
+        host_lay.addWidget(val_card)
+
+        host_lay.addStretch(1)
+
+        from PySide6.QtWidgets import QScrollArea
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setWidget(scroll_host)
+        lay.addWidget(scroll, 1)
+
+        # Save button
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        save_btn = PrimaryButton("Сохранить настройки")
+        save_btn.clicked.connect(self._save)
+        btn_row.addWidget(save_btn)
+        lay.addLayout(btn_row)
+
+        self._load()
+
+    def _load(self):
+        s = get_settings()
+        idx = self.theme_box.findData(s.theme)
+        self.theme_box.setCurrentIndex(max(0, idx))
+        idx = self.provider_box.findData(s.default_provider)
+        self.provider_box.setCurrentIndex(max(0, idx))
+        prov = s.providers.get(s.default_provider)
+        if prov:
+            self.api_key.setText(prov.api_key)
+            self.model.setText(prov.model)
+            self.base_url.setText(prov.base_url)
+        self.timeout.setValue(s.timeout)
+        self.check_placeholders.setChecked(s.validate_placeholders)
+        self.check_strict.setChecked(s.strict_mode)
+
+    def _save(self):
+        s = get_settings()
+        s.theme = self.theme_box.currentData()
+        s.default_provider = self.provider_box.currentData()
+        prov = s.providers.get(s.default_provider) or TranslationProviderConfig(name=s.default_provider)
+        prov.api_key = self.api_key.text().strip()
+        prov.model = self.model.text().strip()
+        prov.base_url = self.base_url.text().strip()
+        s.providers[s.default_provider] = prov
+        s.timeout = self.timeout.value()
+        s.validate_placeholders = self.check_placeholders.isChecked()
+        s.strict_mode = self.check_strict.isChecked()
+        save_settings(s)
+        self.state.settings = s
+        self.state.reset_engine()
+        self.main._apply_theme(s.theme)
+        self.main.toast("Настройки сохранены", "success")
+===== src/bg3_translator/ui/pages/dictionary_page.py (86 lines) =====
+"""Dictionary page: search & browse translation memory."""
+
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QHBoxLayout, QLabel, QLineEdit, QTableWidget, QTableWidgetItem,
+    QVBoxLayout, QWidget, QHeaderView, QAbstractItemView, QPushButton,
+)
+
+from ..state import get_app_state
+from ..widgets import Card, PrimaryButton
+
+
+class DictionaryPage(QWidget):
+    """Browse, search and manage the translation memory."""
+
+    def __init__(self, main_window):
+        super().__init__()
+        self.main = main_window
+        self.state = get_app_state()
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(32, 28, 32, 28)
+        lay.setSpacing(14)
+
+        header = QLabel("Словарь")
+        header.setObjectName("Title")
+        lay.addWidget(header)
+
+        hint = QLabel(
+            "Память переводов: каждое сохранённое значение переиспользуется в других "
+            "модах. Используйте поиск, чтобы просмотреть записи."
+        )
+        hint.setObjectName("Subtitle")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+
+        bar = QHBoxLayout()
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Поиск по исходному тексту…")
+        self.search.setClearButtonEnabled(True)
+        self.search.textChanged.connect(self._reload)
+        bar.addWidget(self.search, 1)
+
+        self.count_label = QLabel("0 записей")
+        self.count_label.setObjectName("Subtitle")
+        bar.addWidget(self.count_label)
+
+        self.refresh_btn = QPushButton("Обновить")
+        self.refresh_btn.clicked.connect(self._reload)
+        bar.addWidget(self.refresh_btn)
+        lay.addLayout(bar)
+
+        self.table = QTableWidget(0, 3)
+        self.table.setHorizontalHeaderLabels(["Источник", "Перевод", "Использований"])
+        self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        hdr = self.table.horizontalHeader()
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(2, 70)
+        lay.addWidget(self.table, 1)
+
+        self._reload()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._reload()
+
+    def _reload(self):
+        needle = self.search.text().strip()
+        if needle:
+            entries = self.state.dictionary.search(needle, "", limit=500)
+            # search() filters by target_lang; empty string returns all — see store
+        else:
+            entries = self.state.dictionary.search("", "", limit=500)
+        total = self.state.dictionary.count()
+        self.count_label.setText(f"показано {len(entries)} / всего {total}")
+        self.table.setRowCount(len(entries))
+        for row, e in enumerate(entries):
+            self.table.setItem(row, 0, QTableWidgetItem(e.source_text))
+            self.table.setItem(row, 1, QTableWidgetItem(e.target_text))
+            uses = QTableWidgetItem(str(e.usage_count))
+            uses.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.table.setItem(row, 2, uses)
+===== src/bg3_translator/ui/progress_panel.py (155 lines) =====
+"""Detailed translation progress panel.
+
+Shows exactly what the program is doing right now: current mod, ordered stage
+list, current file, counters, speed and ETA. All fields are driven by
+JobProgress objects from the async engine, so the display always reflects the
+real state of the run (never a fake spinner).
+"""
+
+from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QProgressBar, QVBoxLayout, QWidget
+
+from ..services.engine import (
+    STAGE_ICON_ACTIVE,
+    STAGE_ICON_DONE,
+    STAGE_ICON_PENDING,
+    STAGE_ORDER,
+    STAGE_TEXT,
+    StageId,
+)
+
+
+def _fmt_time(seconds: float) -> str:
+    """Format a duration in a compact human form."""
+    if seconds <= 0:
+        return "—"
+    seconds = int(seconds)
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h} ч {m:02d} мин"
+    if m:
+        return f"{m} мин {s:02d} с"
+    return f"{s} с"
+
+
+class ProgressPanel(QWidget):
+    """Live, human-readable view of a translation run."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(10)
+
+        head = QHBoxLayout()
+        self.mod_label = QLabel("Мод: —")
+        self.mod_label.setObjectName("Title")
+        head.addWidget(self.mod_label, 1)
+        self.percent_label = QLabel("0%")
+        self.percent_label.setObjectName("Title")
+        head.addWidget(self.percent_label)
+        lay.addLayout(head)
+
+        self.bar = QProgressBar()
+        self.bar.setTextVisible(False)
+        self.bar.setFixedHeight(8)
+        lay.addWidget(self.bar)
+
+        self.stage_label = QLabel("Ожидание запуска")
+        self.stage_label.setObjectName("Subtitle")
+        lay.addWidget(self.stage_label)
+
+        # Stage checklist — fixed order, icon shows the real state.
+        self.stage_labels: dict[str, QLabel] = {}
+        for stage_id in STAGE_ORDER:
+            lbl = QLabel(f"{STAGE_ICON_PENDING}  {STAGE_TEXT[stage_id]}")
+            lbl.setObjectName("Subtitle")
+            self.stage_labels[str(stage_id.value)] = lbl
+            lay.addWidget(lbl)
+
+        grid = QGridLayout()
+        grid.setContentsMargins(0, 6, 0, 0)
+        grid.setHorizontalSpacing(18)
+        grid.setVerticalSpacing(6)
+
+        self.file_label = QLabel("Файл: —")
+        self.line_label = QLabel("Строка: 0 / 0")
+        self.files_label = QLabel("Файлов: 0 / 0")
+        self.done_label = QLabel("Переведено: 0")
+        self.skip_label = QLabel("Пропущено: 0")
+        self.err_label = QLabel("Ошибок: 0")
+        self.speed_label = QLabel("Скорость: —")
+        self.eta_label = QLabel("Осталось: —")
+
+        grid.addWidget(self.file_label, 0, 0, 1, 2)
+
+    # ------------------------------------------------------------------
+    def reset(self) -> None:
+        """Return the panel to its initial state."""
+        self.bar.setMaximum(100)
+        self.bar.setValue(0)
+        self.percent_label.setText("0%")
+        self.stage_label.setText("Ожидание запуска")
+        self.mod_label.setText("Мод: —")
+        for stage_id, lbl in zip(STAGE_ORDER, self.stage_labels.values()):
+            lbl.setText(f"{STAGE_ICON_PENDING}  {STAGE_TEXT[stage_id]}")
+        self.file_label.setText("Файл: —")
+        self.line_label.setText("Строка: 0 / 0")
+        self.files_label.setText("Файлов: 0 / 0")
+        self.done_label.setText("Переведено: 0")
+        self.skip_label.setText("Пропущено: 0")
+        self.err_label.setText("Ошибок: 0")
+        self.speed_label.setText("Скорость: —")
+        self.eta_label.setText("Осталось: —")
+
+    def update_progress(self, pg) -> None:
+        """Refresh every field from a JobProgress payload."""
+        current = str(getattr(pg, "stage", ""))
+        order = [str(s.value) for s in STAGE_ORDER]
+
+        for stage_id, lbl in zip(STAGE_ORDER, self.stage_labels.values()):
+            key = str(stage_id.value)
+            icon = STAGE_ICON_PENDING
+            if current in order and key in order:
+                if order.index(key) < order.index(current):
+                    icon = STAGE_ICON_DONE
+                elif key == current:
+                    icon = STAGE_ICON_ACTIVE
+            lbl.setText(f"{icon}  {STAGE_TEXT[stage_id]}")
+
+        mod = getattr(pg, "current_mod", "") or "—"
+        self.mod_label.setText(f"Мод: {mod}")
+
+        total_files = max(getattr(pg, "total_files", 0), 1)
+        self.bar.setMaximum(total_files)
+        self.bar.setValue(getattr(pg, "processed_files", 0))
+        self.percent_label.setText(f"{getattr(pg, 'percent', 0)}%")
+        self.stage_label.setText(getattr(pg, "stage_text", ""))
+
+        cur_file = getattr(pg, "current_file", "") or "—"
+        self.file_label.setText(f"Файл: {cur_file}")
+        self.line_label.setText(
+            f"Строка: {getattr(pg, 'current_line', 0)} / {getattr(pg, 'lines_total', 0)}"
+        )
+        self.files_label.setText(
+            f"Файлов: {getattr(pg, 'processed_files', 0)} / {getattr(pg, 'total_files', 0)}"
+        )
+        self.done_label.setText(f"Переведено: {getattr(pg, 'succeeded', 0)}")
+        self.skip_label.setText(f"Пропущено: {getattr(pg, 'skipped', 0)}")
+        errors = getattr(pg, "errors", 0) or getattr(pg, "failed", 0)
+        self.err_label.setText(f"Ошибок: {errors}")
+
+        speed = getattr(pg, "speed_lines_per_sec", 0)
+        self.speed_label.setText(f"Скорость: {speed:g} строк/с" if speed else "Скорость: —")
+        self.eta_label.setText(f"Осталось: {_fmt_time(getattr(pg, 'eta_seconds', 0))}")
+
+        grid.addWidget(self.line_label, 1, 0)
+        grid.addWidget(self.files_label, 1, 1)
+        grid.addWidget(self.done_label, 2, 0)
+        grid.addWidget(self.skip_label, 2, 1)
+        grid.addWidget(self.err_label, 3, 0)
+        grid.addWidget(self.speed_label, 3, 1)
+        grid.addWidget(self.eta_label, 4, 0)
+        lay.addLayout(grid)
+
+        lay.addStretch(1)

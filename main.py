@@ -21,6 +21,11 @@ def main() -> int:
     app.setApplicationName("BG3 Mod Translator")
     app.setOrganizationName("BG3ModTranslator")
 
+    from PySide6.QtGui import QFont
+    _font = QFont("Segoe UI", 10)
+    _font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
+    app.setFont(_font)
+
     window = MainWindow()
     window.show()
     return app.exec()

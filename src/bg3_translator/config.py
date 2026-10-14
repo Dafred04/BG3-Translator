@@ -77,7 +77,7 @@ class AppSettings:
     auto_save_interval: int = 30  # seconds
 
     # Translation
-    default_provider: str = "google_free"
+    default_provider: str = "gemini"
     providers: Dict[str, TranslationProviderConfig] = field(default_factory=dict)
     batch_size: int = 50
     max_concurrent_requests: int = 3

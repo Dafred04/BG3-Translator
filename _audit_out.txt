@@ -1,0 +1,50 @@
+=== SYNTAX ===
+
+=== MOJIBAKE (double-encoded UTF-8 markers) ===
+
+=== UI FILE SIZES ===
+  src/bg3_translator/ui\__init__.py: 1 lines
+  src/bg3_translator/ui\main_window.py: 138 lines
+  src/bg3_translator/ui\pages\__init__.py: 1 lines
+  src/bg3_translator/ui\pages\dashboard.py: 169 lines
+  src/bg3_translator/ui\pages\dictionary_page.py: 86 lines
+  src/bg3_translator/ui\pages\editor.py: 428 lines
+  src/bg3_translator/ui\pages\settings_page.py: 206 lines
+  src/bg3_translator/ui\progress_panel.py: 155 lines
+  src/bg3_translator/ui\state.py: 87 lines
+  src/bg3_translator/ui\theme.py: 81 lines
+  src/bg3_translator/ui\widgets.py: 97 lines
+
+=== CONFIG ===
+
+=== PROVIDERS API ===
+  names: ['ABC', 'BaseProvider', 'Dict', 'GOOGLE_LANG', 'GeminiProvider', 'GoogleFreeProvider', 'List', 'OpenAICompatibleProvider', 'Optional', 'TranslateRequest', 'TranslateResult', 'TranslationError']
+  GeminiProvider: ['DEFAULT_BASE_URL', 'DEFAULT_MODEL', 'SYSTEM_PROMPT', 'display_name', 'fallback_models', 'is_configured', 'list_models', 'name', 'requires_key', 'translate']
+  GoogleFreeProvider: ['URL', 'display_name', 'is_configured', 'name', 'requires_key', 'translate']
+  get_provider(name: str, api_key: str = '', model: str = '', base_url: str = '', timeout: int = 60) -> bg3_translator.services.providers.BaseProvider
+
+=== ENGINE API ===
+  methods: ['blockSignals', 'cancel', 'cancelled', 'childEvent', 'children', 'connect', 'connectNotify', 'customEvent', 'deleteLater', 'destroyed', 'disconnect', 'disconnectNotify', 'dumpObjectInfo', 'dumpObjectTree', 'dynamicPropertyNames', 'emit', 'error', 'event', 'eventFilter', 'findChild', 'findChildren', 'finished', 'inherits', 'installEventFilter', 'isQmlExposed', 'isQuickItemType', 'isSignalConnected', 'isWidgetType', 'isWindowType', 'is_running', 'killTimer', 'metaObject', 'moveToThread', 'objectName', 'objectNameChanged', 'parent', 'progress', 'property', 'receivers', 'removeEventFilter', 'run_async', 'sender', 'senderSignalIndex', 'setObjectName', 'setParent', 'setProperty', 'set_provider', 'signalsBlocked', 'stage', 'startTimer', 'staticMetaObject', 'thread', 'timerEvent', 'tr', 'translate_batch', 'translate_entry']
+    run_async(self, project: 'TranslationProject', callback: 'Optional[Callable[[JobProgress], None]]' = None)
+    set_provider(self, provider: 'Optional[BaseProvider]')
+    cancel(self)
+    translate_entry(self, entry: 'TranslationEntry') -> 'bool'
+    translate_batch(self, entries: 'List[TranslationEntry]', on_progress: 'Optional[Callable[[JobProgress], None]]' = None) -> 'JobProgress'
+  JobProgress: ['stage', 'stage_text', 'current_mod', 'current_file', 'current_line', 'lines_total', 'processed_files', 'total_files', 'done', 'total', 'succeeded', 'failed', 'errors', 'warnings', 'skipped', 'percent', 'elapsed_seconds', 'eta_seconds', 'speed_lines_per_sec', 'found_files', 'supported_files', 'unsupported', 'error_details', 'message']
+  STAGE: ['STAGE_ICON_ACTIVE', 'STAGE_ICON_DONE', 'STAGE_ICON_PENDING', 'STAGE_ORDER', 'STAGE_TEXT']
+
+=== STATE API ===
+  attrs: ['blockSignals', 'childEvent', 'children', 'close_project', 'connect', 'connectNotify', 'customEvent', 'deleteLater', 'destroyed', 'disconnect', 'disconnectNotify', 'dumpObjectInfo', 'dumpObjectTree', 'dynamicPropertyNames', 'emit', 'engine', 'entry_edited', 'event', 'eventFilter', 'findChild', 'findChildren', 'inherits', 'installEventFilter', 'isQmlExposed', 'isQuickItemType', 'isSignalConnected', 'isWidgetType', 'isWindowType', 'killTimer', 'metaObject', 'moveToThread', 'new_project', 'objectName', 'objectNameChanged', 'parent', 'project_changed', 'property', 'receivers', 'removeEventFilter', 'reset_engine', 'sender', 'senderSignalIndex', 'setObjectName', 'setParent', 'setProperty', 'signalsBlocked', 'startTimer', 'staticMetaObject', 'stats', 'thread', 'timerEvent', 'tr']
+
+=== THEME API ===
+  names: ['DARK', 'DEFAULT', 'FONT_FAMILY', 'FONT_SIZE', 'LIGHT', 'Palette', 'dataclass']
+  Palette: ['bg', 'bg_elevated', 'surface', 'surface_alt', 'border', 'border_strong', 'text', 'text_muted', 'accent', 'accent_hover', 'accent_pressed', 'accent_text', 'accent_soft', 'danger', 'danger_hover', 'success', 'warning', 'info']
+
+=== MODELS ===
+  TranslationEntry: ['handle', 'uuid', 'source_text', 'source_language', 'target_text', 'target_language', 'status', 'entry_type', 'context', 'comment', 'source_placeholders', 'target_placeholders', 'validation_errors', 'validation_warnings', 'created_at', 'updated_at', 'translated_by', 'translation_confidence', 'alternatives']
+  DictionaryEntry: ['source_text', 'source_language', 'target_text', 'target_language', 'handle', 'context', 'usage_count', 'created_at', 'updated_at', 'source_mod', 'verified', 'tags']
+  ModMetadata: ['name', 'author', 'version', 'description', 'uuid', 'folder', 'supported_languages', 'dependencies', 'source_path', 'is_chinese_mod', 'original_mod_uuid', 'original_mod_folder']
+  TranslationProject: ['metadata', 'entries', 'source_language', 'target_language', 'created_at', 'updated_at', 'settings_snapshot', 'total_entries', 'translated_entries', 'reviewed_entries']
+  Project methods: ['from_dict', 'get_entries_by_status', 'get_progress', 'get_untranslated', 'reviewed_entries', 'source_language', 'target_language', 'to_dict', 'total_entries', 'translated_entries', 'update_stats']
+  EntryType: ['TEXT', 'DIALOGUE', 'ITEM', 'SPELL', 'UI', 'OTHER']
+  TranslationStatus: ['NEW', 'TRANSLATED', 'DICTIONARY_MATCH', 'AUTO_TRANSLATED', 'NEEDS_REVIEW', 'APPROVED', 'LOCKED']

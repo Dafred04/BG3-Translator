@@ -1,6 +1,7 @@
 from .dictionary import DictionaryStore
 from .providers import (
     BaseProvider,
+    GeminiProvider,
     GoogleFreeProvider,
     OpenAICompatibleProvider,
     TranslateRequest,
@@ -13,6 +14,7 @@ from .engine import TranslationEngine
 __all__ = [
     "DictionaryStore",
     "BaseProvider",
+    "GeminiProvider",
     "GoogleFreeProvider",
     "OpenAICompatibleProvider",
     "TranslateRequest",

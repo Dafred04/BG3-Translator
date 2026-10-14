@@ -173,7 +173,19 @@ class EditorPage(QWidget):
         lay.addWidget(self.empty_label, 1)
 
         self.state.project_changed.connect(self.reload)
+        self._connect_engine()
         self.reload()
+
+    def _connect_engine(self):
+        """Connect engine signals once. The engine object is stable (its provider
+        is swapped in-place on settings change), so these connections stay valid
+        for the whole session and never need disconnecting."""
+        engine = self.state.engine
+        engine.progress.connect(self._on_translate_progress)
+        engine.stage.connect(self._on_translate_stage)
+        engine.finished.connect(self._on_translate_finished)
+        engine.error.connect(self._on_translate_error)
+        engine.cancelled.connect(self._on_translate_cancelled)
 
     # ---------- data loading ----------
     def reload(self):
@@ -277,14 +289,9 @@ class EditorPage(QWidget):
 
         # Run the whole loop in the engine's worker thread. Only Qt signals
         # (queued to the main thread) update the UI, so the window never freezes
-        # even if a single Gemini call takes many seconds.
+        # even if a single Gemini call takes many seconds. Signals are connected
+        # once in __init__, so nothing to wire up here.
         engine = self.state.engine
-        self._disconnect_engine()
-        engine.progress.connect(self._on_translate_progress)
-        engine.stage.connect(self._on_translate_stage)
-        engine.finished.connect(self._on_translate_finished)
-        engine.error.connect(self._on_translate_error)
-        engine.cancelled.connect(self._on_translate_cancelled)
 
         self.progress.setVisible(True)
         self.progress.setMaximum(len(targets))
@@ -327,7 +334,6 @@ class EditorPage(QWidget):
         self.progress.setVisible(False)
         self.translate_btn.setEnabled(True)
         self.cancel_btn.setVisible(False)
-        self._disconnect_engine()
         if self.state.project:
             self.state.project.update_stats()
         self.reload()
@@ -335,6 +341,12 @@ class EditorPage(QWidget):
     def _on_translate_finished(self, _project):
         self._finish_translate()
         s = self.state.stats()
+        if s["translated"] == 0 and s["total"] > 0:
+            reason = getattr(self.state.engine, "first_error", None) or (
+                "Не удалось перевести строки. Проверьте провайдера в «Настройках»."
+            )
+            self.main.toast(f"Ни одна строка не переведена. {reason}", "error", 9000)
+            return
         self.main.toast(
             f"Перевод завершён: {s['translated']}/{s['total']} строк ({s['percent']}%)",
             "success", 5000,
@@ -350,20 +362,6 @@ class EditorPage(QWidget):
         if self.state.project:
             self.state.project.update_stats()
         self.reload()
-
-    def _disconnect_engine(self):
-        engine = self.state.engine
-        for sig, slot in (
-            (engine.progress, self._on_translate_progress),
-            (engine.stage, self._on_translate_stage),
-            (engine.finished, self._on_translate_finished),
-            (engine.error, self._on_translate_error),
-            (engine.cancelled, self._on_translate_cancelled),
-        ):
-            try:
-                sig.disconnect(slot)
-            except (RuntimeError, TypeError):
-                pass
 
 
     # ---------- export ----------

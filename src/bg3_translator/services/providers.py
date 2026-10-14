@@ -147,9 +147,121 @@ class OpenAICompatibleProvider(BaseProvider):
         return TranslateResult(texts=lines, provider=self.name, characters=self.characters_used)
 
 
+class GeminiProvider(BaseProvider):
+    """Google Gemini via the official Generative Language API (generativelanguage).
+
+    Uses an API key. Supports model selection and live model listing.
+    """
+
+    name = "gemini"
+    display_name = "Google Gemini"
+    requires_key = True
+
+    DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+    DEFAULT_MODEL = "gemini-2.5-flash"
+
+    SYSTEM_PROMPT = (
+        "You are a professional game localizer for Baldur's Gate 3. "
+        "Translate from {src} to {tgt}. "
+        "Preserve ALL placeholders exactly: <LSTag>...</LSTag>, &entity;, {{0}}, [1], \\n. "
+        "Keep D&D/BG3 terminology consistent and natural. "
+        "Return ONLY the translated text, one line per input line, no numbering, no comments."
+    )
+
+    def _lang_name(self, code: str) -> str:
+        return {
+            "en": "English", "ru": "Russian", "zh": "Simplified Chinese",
+            "zh_tw": "Traditional Chinese", "ko": "Korean", "ja": "Japanese",
+            "pl": "Polish", "de": "German", "fr": "French", "es": "Spanish",
+            "es_mx": "Latin American Spanish", "pt_br": "Brazilian Portuguese",
+            "it": "Italian", "tr": "Turkish",
+        }.get(code, code)
+
+    def list_models(self) -> List[str]:
+        """Fetch available model names from the Gemini API (falls back to a
+        curated list on error)."""
+        base = (self.base_url or self.DEFAULT_BASE_URL).rstrip("/")
+        url = f"{base}/models"
+        try:
+            resp = requests.get(url, params={"key": self.api_key}, timeout=self.timeout)
+            resp.raise_for_status()
+            data = resp.json()
+            names = []
+            for m in data.get("models", []):
+                nm = m.get("name", "")
+                if "generateContent" not in (m.get("supportedGenerationMethods") or []):
+                    continue
+                if nm.startswith("models/"):
+                    nm = nm[len("models/"):]
+                if "embedding" in nm or "aqa" in nm:
+                    continue
+                names.append(nm)
+            return names or self.fallback_models()
+        except Exception:
+            return self.fallback_models()
+
+    @staticmethod
+    def fallback_models() -> List[str]:
+        return [
+            "gemini-2.5-flash",
+            "gemini-2.5-pro",
+            "gemini-2.0-flash",
+            "gemini-2.0-flash-lite",
+            "gemini-1.5-flash",
+            "gemini-1.5-pro",
+        ]
+
+    def translate(self, request: TranslateRequest) -> TranslateResult:
+        if not self.is_configured():
+            raise TranslationError("Ключ API Gemini не задан")
+        model = self.model or self.DEFAULT_MODEL
+        base = (self.base_url or self.DEFAULT_BASE_URL).rstrip("/")
+        url = f"{base}/models/{model}:generateContent"
+        system = self.SYSTEM_PROMPT.format(
+            src=self._lang_name(request.source_lang),
+            tgt=self._lang_name(request.target_lang),
+        )
+        user_content = "\n".join(request.texts)
+        payload = {
+            "systemInstruction": {"parts": [{"text": system}]},
+            "contents": [{"parts": [{"text": user_content}]}],
+            "generationConfig": {"temperature": 0.2},
+        }
+        try:
+            resp = requests.post(
+                url, params={"key": self.api_key}, json=payload, timeout=self.timeout
+            )
+            if resp.status_code in (401, 403):
+                raise TranslationError("Неверный ключ API Gemini (401/403)")
+            if resp.status_code == 404:
+                raise TranslationError(f"Модель Gemini не найдена: {model}")
+            if resp.status_code == 429:
+                raise TranslationError("Лимит запросов Gemini исчерпан (429)")
+            resp.raise_for_status()
+            data = resp.json()
+            parts = data["candidates"][0]["content"]["parts"]
+            content = "".join(p.get("text", "") for p in parts)
+        except TranslationError:
+            raise
+        except Exception as exc:
+            raise TranslationError(f"Запрос к Gemini не удался: {exc}") from exc
+
+        lines = [line.strip() for line in content.split("\n") if line.strip()]
+        if len(lines) != len(request.texts):
+            if len(request.texts) == 1:
+                lines = [content.strip()]
+            else:
+                raise TranslationError(
+                    f"Gemini вернула {len(lines)} строк для {len(request.texts)} входов"
+                )
+        self.characters_used += len(user_content)
+        return TranslateResult(texts=lines, provider=self.name, characters=self.characters_used)
+
+
 def get_provider(name: str, api_key: str = "", model: str = "", base_url: str = "", timeout: int = 60) -> BaseProvider:
     """Factory for providers by name."""
     providers = {
+        "gemini": GeminiProvider,
         "google_free": GoogleFreeProvider,
         "openai_compatible": OpenAICompatibleProvider,
     }

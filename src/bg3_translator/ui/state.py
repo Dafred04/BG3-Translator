@@ -24,26 +24,32 @@ class AppState(QObject):
         self.project: Optional[TranslationProject] = None
         self._engine: Optional[TranslationEngine] = None
 
+    def _build_provider(self):
+        prov_cfg = self.settings.providers.get(self.settings.default_provider)
+        try:
+            return get_provider(
+                self.settings.default_provider,
+                api_key=prov_cfg.api_key if prov_cfg else "",
+                model=prov_cfg.model if prov_cfg else "",
+                base_url=prov_cfg.base_url if prov_cfg else "",
+                timeout=self.settings.timeout,
+            )
+        except Exception:
+            return None
+
     @property
     def engine(self) -> TranslationEngine:
         if self._engine is None:
-            provider = None
-            prov_cfg = self.settings.providers.get(self.settings.default_provider)
-            try:
-                provider = get_provider(
-                    self.settings.default_provider,
-                    api_key=prov_cfg.api_key if prov_cfg else "",
-                    model=prov_cfg.model if prov_cfg else "",
-                    base_url=prov_cfg.base_url if prov_cfg else "",
-                    timeout=self.settings.timeout,
-                )
-            except Exception:
-                provider = None
-            self._engine = TranslationEngine(self.dictionary, provider=provider)
+            self._engine = TranslationEngine(self.dictionary, provider=self._build_provider())
         return self._engine
 
     def reset_engine(self):
-        self._engine = None
+        """Rebuild the provider in-place, keeping the same engine object so UI
+        signal connections stay valid (avoids disconnect warnings)."""
+        if self._engine is None:
+            self._engine = TranslationEngine(self.dictionary, provider=self._build_provider())
+        else:
+            self._engine.set_provider(self._build_provider())
 
     def new_project(self, metadata: ModMetadata, entries: list[TranslationEntry],
                     source_lang: str, target_lang: str):
