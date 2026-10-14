@@ -1,7 +1,0 @@
-entries: 507
-xml strings: 125
-loca strings: 125
-loca sample: [('hc304daf17f9846a5abef223acb3afcbc2g91', 'KAZSTRA Scar 01'), ('h1b719d44ec2a488bab50c8fab6e053cf0885', 'KAZSTRA Scar 02'), ('h5ffea5a246c645319fe24fcaf39ebfc1e6b9', 'KAZSTRA Scar 03')]
-key overlap: 125 / 125
-loca round-trip: OK
-unique_tav regression: PASSED

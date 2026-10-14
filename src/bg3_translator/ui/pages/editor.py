@@ -1,19 +1,28 @@
 """Translation editor page + mod import worker."""
 
+from __future__ import annotations
+
 import zipfile
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QObject, Signal
+from PySide6.QtCore import Qt, QObject, QTimer, Signal
+from PySide6.QtGui import QBrush, QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QComboBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QTableWidget,
-    QTableWidgetItem, QVBoxLayout, QWidget, QProgressBar, QHeaderView,
-    QAbstractItemView,
+    QAbstractItemView, QComboBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
+from .. import theme
+from ..progress_panel import ProgressPanel
 from ..state import get_app_state
-from ..widgets import Card, PrimaryButton
+from ..widgets import (
+    Card, Chip, Collapsible, DangerButton, EmptyState, GhostButton,
+    GlowProgressBar, PrimaryButton,
+)
 from ...core.locaxml import parse_loca_xml, loca_to_entries
 from ...models.translation import ModMetadata, TranslationProject, TranslationStatus
+
+AI_COLOR = "#b98cff"
 
 
 class ImportWorker(QObject):
@@ -101,8 +110,9 @@ class ImportWorker(QObject):
         return result
 
 
+
 class EditorPage(QWidget):
-    """Side-by-side translation table with search, filter, batch translate."""
+    """Таблица перевода: поиск, фильтр, пакетный перевод с живым прогрессом."""
 
     COL_STATUS, COL_SRC, COL_TGT = 0, 1, 2
 
@@ -110,25 +120,41 @@ class EditorPage(QWidget):
         super().__init__()
         self.main = main_window
         self.state = get_app_state()
+        self._running = False
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(32, 28, 32, 28)
         lay.setSpacing(14)
 
+        # ---------- заголовок + счётчики ----------
+        head = QHBoxLayout()
+        head.setSpacing(8)
         header = QLabel("Перевод")
-        header.setObjectName("Title")
-        lay.addWidget(header)
+        header.setObjectName("PageTitle")
+        head.addWidget(header)
+        head.addStretch(1)
+        self.chip_total = Chip("Всего: 0")
+        self.chip_done = Chip("Переведено: 0", "success")
+        self.chip_err = Chip("Ошибок: 0")
+        for c in (self.chip_total, self.chip_done, self.chip_err):
+            head.addWidget(c)
+        lay.addLayout(head)
 
+        # ---------- панель инструментов ----------
         bar = QHBoxLayout()
         bar.setSpacing(10)
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Поиск по исходному тексту или переводу…")
+        self.search.setPlaceholderText("Поиск по тексту или переводу…  (Ctrl+F)")
         self.search.setClearButtonEnabled(True)
-        self.search.textChanged.connect(self._apply_filter)
+        self._debounce = QTimer(self)
+        self._debounce.setSingleShot(True)
+        self._debounce.setInterval(220)
+        self._debounce.timeout.connect(self._apply_filter)
+        self.search.textChanged.connect(lambda _t: self._debounce.start())
         bar.addWidget(self.search, 1)
 
         self.filter_box = QComboBox()
-        self.filter_box.addItem("Все", "all")
+        self.filter_box.addItem("Все строки", "all")
         self.filter_box.addItem("Не переведено", "untranslated")
         self.filter_box.addItem("Переведено", "translated")
         self.filter_box.addItem("С ошибками", "errors")
@@ -139,42 +165,68 @@ class EditorPage(QWidget):
         self.translate_btn.clicked.connect(self._translate_all)
         bar.addWidget(self.translate_btn)
 
-        self.cancel_btn = PrimaryButton("Остановить")
+        self.cancel_btn = DangerButton("Остановить")
         self.cancel_btn.clicked.connect(self._cancel_translate)
         self.cancel_btn.setVisible(False)
         bar.addWidget(self.cancel_btn)
 
-        self.export_btn = PrimaryButton("Экспорт…")
+        self.export_btn = GhostButton("Экспорт…")
         self.export_btn.clicked.connect(self._export)
         bar.addWidget(self.export_btn)
         lay.addLayout(bar)
 
-        self.progress = QProgressBar()
-        self.progress.setVisible(False)
-        lay.addWidget(self.progress)
+        # ---------- общий прогресс проекта ----------
+        self.overall = GlowProgressBar(height=6)
+        lay.addWidget(self.overall)
 
+        # ---------- живая панель прогресса (разворачивается при запуске) ----------
+        panel_card = Card()
+        pcl = QVBoxLayout(panel_card)
+        pcl.setContentsMargins(22, 18, 22, 18)
+        self.panel = ProgressPanel()
+        pcl.addWidget(self.panel)
+        self.reveal = Collapsible(panel_card)
+        lay.addWidget(self.reveal)
+
+        # ---------- таблица ----------
         self.table = QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(["Статус", "Исходный текст", "Перевод"])
         self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(46)
+        self.table.setShowGrid(False)
+        self.table.setAlternatingRowColors(True)
+        self.table.setTextElideMode(Qt.TextElideMode.ElideRight)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked
-                                   | QAbstractItemView.EditTrigger.SelectedClicked)
+                                   | QAbstractItemView.EditTrigger.SelectedClicked
+                                   | QAbstractItemView.EditTrigger.EditKeyPressed)
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(self.COL_STATUS, QHeaderView.ResizeMode.Fixed)
         hdr.setSectionResizeMode(self.COL_SRC, QHeaderView.ResizeMode.Stretch)
         hdr.setSectionResizeMode(self.COL_TGT, QHeaderView.ResizeMode.Stretch)
-        self.table.setColumnWidth(self.COL_STATUS, 110)
+        self.table.setColumnWidth(self.COL_STATUS, 130)
         self.table.itemChanged.connect(self._on_item_changed)
         lay.addWidget(self.table, 1)
 
-        self.empty_label = QLabel("Проект не загружен.\nОткройте мод на главном экране, чтобы начать.")
-        self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.empty_label.setObjectName("Subtitle")
-        lay.addWidget(self.empty_label, 1)
+        self.empty = EmptyState(
+            "📂", "Здесь появится перевод",
+            "Откройте мод на главном экране — строки появятся в таблице, "
+            "и их можно будет перевести одной кнопкой.",
+        )
+        go = PrimaryButton("Открыть мод")
+        go.clicked.connect(lambda: self.main.navigate("dashboard"))
+        self.empty.add_action(go)
+        lay.addWidget(self.empty, 1)
+
+        QShortcut(QKeySequence("Ctrl+F"), self, activated=self._focus_search)
 
         self.state.project_changed.connect(self.reload)
         self._connect_engine()
         self.reload()
+
+    def _focus_search(self):
+        self.search.setFocus()
+        self.search.selectAll()
 
     def _connect_engine(self):
         """Connect engine signals once. The engine object is stable (its provider
@@ -190,29 +242,48 @@ class EditorPage(QWidget):
     # ---------- data loading ----------
     def reload(self):
         project = self.state.project
+        self.table.blockSignals(True)
         self.table.setRowCount(0)
         has = project is not None and bool(project.entries)
         self.table.setVisible(has)
-        self.empty_label.setVisible(not has)
-        self.translate_btn.setEnabled(has)
+        self.empty.setVisible(not has)
+        self.translate_btn.setEnabled(has and not self._running)
         self.export_btn.setEnabled(has)
         if not has:
+            self.table.blockSignals(False)
+            self._refresh_stats()
             return
         entries = project.entries
-        self.table.setSortingEnabled(False)
         self.table.setRowCount(len(entries))
         for row, e in enumerate(entries):
-            status_item = QTableWidgetItem(self._status_label(e.status))
-            status_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            status_item = QTableWidgetItem()
+            status_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
             src_item = QTableWidgetItem(e.source_text)
-            src_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            src_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+            src_item.setToolTip(e.source_text)
             tgt_item = QTableWidgetItem(e.target_text)
             tgt_item.setData(Qt.ItemDataRole.UserRole, e.handle)
+            tgt_item.setToolTip(e.target_text)
             self.table.setItem(row, self.COL_STATUS, status_item)
             self.table.setItem(row, self.COL_SRC, src_item)
             self.table.setItem(row, self.COL_TGT, tgt_item)
-        self.table.setSortingEnabled(True)
+            self._style_row(row, e)
+        self.table.blockSignals(False)
+        self._refresh_stats()
+        self._apply_filter()
 
+    def _refresh_stats(self):
+        s = self.state.stats()
+        self.chip_total.setText(f"Всего: {s['total']}")
+        self.chip_done.setText(f"Переведено: {s['translated']}")
+        self.chip_err.setText(f"Ошибок: {s['errors']}")
+        self.chip_err.set_tone("danger" if s["errors"] else "")
+        self.overall.setMaximum(100)
+        self.overall.setValue(s["percent"])
+        left = max(s["total"] - s["translated"], 0)
+        self.translate_btn.setText(f"Перевести всё · {left}" if left else "Перевести всё")
+
+    # ---------- row styling ----------
     @staticmethod
     def _status_label(status: TranslationStatus) -> str:
         return {
@@ -224,6 +295,43 @@ class EditorPage(QWidget):
             TranslationStatus.APPROVED: "✔ Готово",
             TranslationStatus.LOCKED: "Закрыто",
         }.get(status, status.value)
+
+    @staticmethod
+    def _status_color(status: TranslationStatus) -> str:
+        pal = theme.current()
+        return {
+            TranslationStatus.NEW: pal.text_muted,
+            TranslationStatus.TRANSLATED: pal.success,
+            TranslationStatus.DICTIONARY_MATCH: pal.info,
+            TranslationStatus.AUTO_TRANSLATED: AI_COLOR,
+            TranslationStatus.NEEDS_REVIEW: pal.warning,
+            TranslationStatus.APPROVED: pal.success,
+            TranslationStatus.LOCKED: pal.text_muted,
+        }.get(status, pal.text_muted)
+
+    def _style_row(self, row: int, e):
+        """Цвет и текст статуса; красная подсветка строки при ошибках плейсхолдеров."""
+        pal = theme.current()
+        st = self.table.item(row, self.COL_STATUS)
+        src = self.table.item(row, self.COL_SRC)
+        tgt = self.table.item(row, self.COL_TGT)
+        if st is None or src is None or tgt is None:
+            return
+        has_err = e.has_validation_errors()
+        if has_err:
+            st.setText("✖ Ошибка")
+            st.setForeground(QBrush(QColor(pal.danger)))
+            tint = QBrush(theme.qcolor(pal.danger, 34))
+            for it in (st, src, tgt):
+                it.setBackground(tint)
+            errs = list(getattr(e, "validation_errors", []) or [])
+            st.setToolTip("\n".join(str(x) for x in errs) or "Ошибка плейсхолдеров")
+        else:
+            st.setText(self._status_label(e.status))
+            st.setForeground(QBrush(QColor(self._status_color(e.status))))
+            for it in (st, src, tgt):
+                it.setData(Qt.ItemDataRole.BackgroundRole, None)
+            st.setToolTip("")
 
     # ---------- editing ----------
     def _on_item_changed(self, item: QTableWidgetItem):
@@ -246,6 +354,11 @@ class EditorPage(QWidget):
                     e.validation_errors = errs
                     e.validation_warnings = warns
                     project.update_stats()
+                    self.table.blockSignals(True)
+                    item.setToolTip(new_text)
+                    self._style_row(item.row(), e)
+                    self.table.blockSignals(False)
+                    self._refresh_stats()
                     self.state.entry_edited.emit(handle)
                 break
 
@@ -257,12 +370,15 @@ class EditorPage(QWidget):
         needle = self.search.text().lower()
         mode = self.filter_box.currentData()
         by_handle = {e.handle: e for e in project.entries}
+        self.table.setUpdatesEnabled(False)
         for row in range(self.table.rowCount()):
-            src = self.table.item(row, self.COL_SRC).text().lower()
-            tgt = self.table.item(row, self.COL_TGT).text().lower()
-            handle = self.table.item(row, self.COL_TGT).data(Qt.ItemDataRole.UserRole)
+            src_it = self.table.item(row, self.COL_SRC)
+            tgt_it = self.table.item(row, self.COL_TGT)
+            if src_it is None or tgt_it is None:
+                continue
+            handle = tgt_it.data(Qt.ItemDataRole.UserRole)
             entry = by_handle.get(handle)
-            match_text = (not needle) or (needle in src) or (needle in tgt)
+            match_text = (not needle) or (needle in src_it.text().lower()) or (needle in tgt_it.text().lower())
             match_mode = True
             if mode == "untranslated":
                 match_mode = bool(entry) and not entry.is_translated()
@@ -271,6 +387,7 @@ class EditorPage(QWidget):
             elif mode == "errors":
                 match_mode = bool(entry and entry.has_validation_errors())
             self.table.setRowHidden(row, not (match_text and match_mode))
+        self.table.setUpdatesEnabled(True)
 
     # ---------- batch translate (async, UI never freezes) ----------
     def _translate_all(self):
@@ -287,15 +404,14 @@ class EditorPage(QWidget):
                 "из словаря. Настройте провайдера в разделе «Настройки».", "warning", 5000
             )
 
-        # Run the whole loop in the engine's worker thread. Only Qt signals
-        # (queued to the main thread) update the UI, so the window never freezes
-        # even if a single Gemini call takes many seconds. Signals are connected
-        # once in __init__, so nothing to wire up here.
+        # The engine runs its loop in a worker thread; only queued Qt signals touch the UI,
+        # so the window never freezes. Signals are connected once in __init__.
         engine = self.state.engine
 
-        self.progress.setVisible(True)
-        self.progress.setMaximum(len(targets))
-        self.progress.setValue(0)
+        self._running = True
+        self.panel.reset()
+        self.panel.mod_label.setText(f"Мод: {project.metadata.name}")
+        self.reveal.expand()
         self.translate_btn.setEnabled(False)
         self.cancel_btn.setVisible(True)
         self.cancel_btn.setEnabled(True)
@@ -319,24 +435,27 @@ class EditorPage(QWidget):
         self.main.set_status(stage_text)
 
     def _on_translate_progress(self, pg):
-        self.progress.setMaximum(max(getattr(pg, "total_files", 0), 1))
-        self.progress.setValue(getattr(pg, "processed_files", 0))
+        self.panel.update_progress(pg)
         err = getattr(pg, "failed", 0)
         skip = getattr(pg, "skipped", 0)
         done = getattr(pg, "succeeded", 0)
         self.main.set_status(
-            f"{pg.stage_text} · {done}/{getattr(pg, 'lines_total', 0)} строк"
+            f"{getattr(pg, 'stage_text', '')} · {done}/{getattr(pg, 'lines_total', 0)} строк"
             + (f" · ошибок: {err}" if err else "")
             + (f" · пропущено: {skip}" if skip else "")
         )
 
     def _finish_translate(self):
-        self.progress.setVisible(False)
-        self.translate_btn.setEnabled(True)
+        self._running = False
         self.cancel_btn.setVisible(False)
         if self.state.project:
             self.state.project.update_stats()
-        self.reload()
+        self.reload()                               # включает кнопку «Перевести»
+        QTimer.singleShot(2200, self._maybe_collapse)
+
+    def _maybe_collapse(self):
+        if not self._running:
+            self.reveal.collapse()
 
     def _on_translate_finished(self, _project):
         self._finish_translate()
@@ -351,6 +470,7 @@ class EditorPage(QWidget):
             f"Перевод завершён: {s['translated']}/{s['total']} строк ({s['percent']}%)",
             "success", 5000,
         )
+        self.state.entry_edited.emit("")      # обновить главную и сайдбар
 
     def _on_translate_error(self, message):
         self._finish_translate()
@@ -358,10 +478,7 @@ class EditorPage(QWidget):
 
     def _on_translate_cancelled(self):
         self._finish_translate()
-        self.main.toast("Перевод остановлен пользователем.", "warning")
-        if self.state.project:
-            self.state.project.update_stats()
-        self.reload()
+        self.main.toast("Перевод остановлен.", "warning")
 
 
     # ---------- export ----------

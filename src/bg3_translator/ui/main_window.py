@@ -1,18 +1,31 @@
-"""Main application window with sidebar navigation."""
+"""Main application window: animated sidebar navigation + pages + toasts."""
 
-from PySide6.QtCore import Qt, QSize
+from __future__ import annotations
+
+from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QRect, QSize, Qt, QTimer
+from PySide6.QtGui import QFontMetrics, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QApplication, QButtonGroup, QHBoxLayout, QLabel, QMainWindow,
-    QPushButton, QStackedWidget, QVBoxLayout, QWidget, QFrame,
+    QApplication, QButtonGroup, QFrame, QHBoxLayout, QLabel, QMainWindow,
+    QPushButton, QVBoxLayout, QWidget,
 )
 
+from . import theme
 from .theme import DARK, LIGHT, build_stylesheet
-from .widgets import Toast
+from .state import get_app_state
+from .widgets import Chip, FadeStack, GlowProgressBar, Toast, repolish
 from ..config import get_settings
+
+_PROVIDER_NAMES = {
+    "gemini": "Gemini",
+    "openai_compatible": "OpenAI-совместимый",
+    "google_free": "Google Переводчик",
+}
 
 
 class MainWindow(QMainWindow):
-    """Shell window: left sidebar nav + stacked pages + toast host."""
+    """Shell window: left sidebar nav + animated stacked pages + toast host."""
+
+    MAX_TOASTS = 4
 
     def __init__(self):
         super().__init__()
@@ -21,118 +34,255 @@ class MainWindow(QMainWindow):
         self.resize(1280, 800)
 
         self.settings = get_settings()
+        self.state = get_app_state()
+        self._toasts: list[Toast] = []
         self._apply_theme(self.settings.theme)
 
         root = QWidget()
+        root.setObjectName("Root")
         root_lay = QHBoxLayout(root)
         root_lay.setContentsMargins(0, 0, 0, 0)
         root_lay.setSpacing(0)
         self.setCentralWidget(root)
 
-        # --- Sidebar ---
+        # ---------------- Sidebar ----------------
         self.sidebar = QFrame()
         self.sidebar.setObjectName("Sidebar")
-        self.sidebar.setFixedWidth(220)
-        side_lay = QVBoxLayout(self.sidebar)
-        side_lay.setContentsMargins(12, 20, 12, 20)
-        side_lay.setSpacing(4)
+        self.sidebar.setFixedWidth(232)
+        side = QVBoxLayout(self.sidebar)
+        side.setContentsMargins(14, 22, 14, 16)
+        side.setSpacing(4)
 
-        logo = QLabel("BG3 Mod Translator")
-        logo.setObjectName("Title")
-        logo.setWordWrap(True)
-        side_lay.addWidget(logo)
+        brand = QHBoxLayout()
+        brand.setSpacing(12)
+        badge = QLabel("B")
+        badge.setObjectName("LogoBadge")
+        badge.setFixedSize(40, 40)
+        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        brand.addWidget(badge)
+        names = QVBoxLayout()
+        names.setSpacing(0)
+        logo = QLabel("BG3 Translator")
+        logo.setObjectName("CardTitle")
         subtitle = QLabel("v2.0 · Локализация модов")
         subtitle.setObjectName("Subtitle")
-        side_lay.addWidget(subtitle)
-        side_lay.addSpacing(24)
+        names.addWidget(logo)
+        names.addWidget(subtitle)
+        brand.addLayout(names, 1)
+        side.addLayout(brand)
+        side.addSpacing(26)
+
+        # Подвижная подсветка активного пункта (создаётся ДО кнопок -> лежит под ними)
+        self._indicator = QFrame(self.sidebar)
+        self._indicator.setObjectName("NavIndicator")
+        self._bar = QFrame(self.sidebar)
+        self._bar.setObjectName("NavBar")
+        self._ind_anim = QPropertyAnimation(self._indicator, b"geometry", self)
+        self._ind_anim.setDuration(340)
+        self._ind_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._bar_anim = QPropertyAnimation(self._bar, b"geometry", self)
+        self._bar_anim.setDuration(460)
+        self._bar_anim.setEasingCurve(QEasingCurve.Type.OutBack)
 
         self.nav_group = QButtonGroup(self)
         self.nav_group.setExclusive(True)
         self._nav_buttons: list[QPushButton] = []
 
-        # Pages registered here: (key, label, widget_factory)
         from .pages.dashboard import DashboardPage
         from .pages.editor import EditorPage
         from .pages.dictionary_page import DictionaryPage
         from .pages.settings_page import SettingsPage
 
-        self.stack = QStackedWidget()
+        self.stack = FadeStack()
         self.pages: dict[str, QWidget] = {}
 
         page_defs = [
-            ("dashboard", "🏠  Главная", DashboardPage(self)),
-            ("editor", "📝  Перевод", EditorPage(self)),
-            ("dictionary", "📚  Словарь", DictionaryPage(self)),
-            ("settings", "⚙  Настройки", SettingsPage(self)),
+            ("dashboard", "🏠   Главная", DashboardPage(self)),
+            ("editor", "📝   Перевод", EditorPage(self)),
+            ("dictionary", "📚   Словарь", DictionaryPage(self)),
+            ("settings", "⚙   Настройки", SettingsPage(self)),
         ]
-        for key, label, widget in page_defs:
+        for i, (key, label, widget) in enumerate(page_defs):
             btn = QPushButton(label)
             btn.setObjectName("NavButton")
             btn.setCheckable(True)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setFixedHeight(40)
-            self.nav_group.addButton(btn)
+            btn.setFixedHeight(42)
+            btn.setToolTip(f"Ctrl+{i + 1}")
+            self.nav_group.addButton(btn, i)
             self._nav_buttons.append(btn)
-            side_lay.addWidget(btn)
+            side.addWidget(btn)
             self.pages[key] = widget
             self.stack.addWidget(widget)
+            QShortcut(QKeySequence(f"Ctrl+{i + 1}"), self, activated=lambda i=i: self._go(i))
 
-        self.nav_group.idClicked.connect(self._on_nav)
-        side_lay.addStretch(1)
+        self.nav_group.idClicked.connect(self._go)
+        side.addStretch(1)
+
+        # Карточка текущего проекта (внизу сайдбара)
+        self._proj_card = QFrame()
+        self._proj_card.setObjectName("SideCard")
+        pc = QVBoxLayout(self._proj_card)
+        pc.setContentsMargins(12, 10, 12, 12)
+        pc.setSpacing(6)
+        cap = QLabel("Текущий мод")
+        cap.setObjectName("Subtitle")
+        self._proj_name = QLabel("Не открыт")
+        self._proj_name.setObjectName("CardTitle")
+        self._proj_bar = GlowProgressBar(height=6)
+        self._proj_pct = QLabel("Откройте мод на главной")
+        self._proj_pct.setObjectName("Subtitle")
+        pc.addWidget(cap)
+        pc.addWidget(self._proj_name)
+        pc.addWidget(self._proj_bar)
+        pc.addWidget(self._proj_pct)
+        side.addWidget(self._proj_card)
 
         root_lay.addWidget(self.sidebar)
         root_lay.addWidget(self.stack, 1)
 
-        # --- Status bar (bottom) ---
+        # ---------------- Status bar ----------------
         self.statusBar().setObjectName("StatusBar")
         self.statusBar().setSizeGripEnabled(False)
         self._status_label = QLabel("Готово")
         self._status_label.setObjectName("Subtitle")
         self.statusBar().addWidget(self._status_label)
+        self._provider_chip = Chip("")
+        self.statusBar().addPermanentWidget(self._provider_chip)
+        self._refresh_provider_chip()
 
-        # Select dashboard
         self._nav_buttons[0].setChecked(True)
+        self._cur_idx = 0
+        self.state.project_changed.connect(self._refresh_project_card)
+        self.state.entry_edited.connect(lambda _h: self._refresh_project_card())
+        self._refresh_project_card(animate=False)
+        QTimer.singleShot(0, lambda: self._move_indicator(False))
 
-        # Toast overlay
-        self._toast_host = QWidget(self)
-        toast_lay = QVBoxLayout(self._toast_host)
-        toast_lay.setContentsMargins(0, 0, 24, 24)
-        toast_lay.addStretch(1)
-        self._toast_host.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self._toast_host.raise_()
-
-    def _on_nav(self, button_id: int):
-        btn = self.nav_group.button(button_id)
-        idx = self._nav_buttons.index(btn)
-        self.stack.setCurrentIndex(idx)
+    # ------------------------------------------------------------------
+    # Navigation
+    # ------------------------------------------------------------------
+    def _go(self, idx: int):
+        self._nav_buttons[idx].setChecked(True)
+        self._cur_idx = idx
+        self.stack.set_index_animated(idx)
+        self._move_indicator(True)
+        self._refresh_project_card()
 
     def navigate(self, page_key: str):
-        keys = list(self.pages.keys())
-        idx = keys.index(page_key)
-        self._nav_buttons[idx].setChecked(True)
-        self.stack.setCurrentIndex(idx)
+        self._go(list(self.pages.keys()).index(page_key))
 
+    def _move_indicator(self, animate: bool = True):
+        btn = self._nav_buttons[self._cur_idx] if self._nav_buttons else None
+        if btn is None or btn.width() <= 0:
+            return
+        g = btn.geometry()
+        bar = QRect(g.x() - 6, g.y() + 11, 3, g.height() - 22)
+        if animate and self._indicator.isVisible():
+            for anim, rect, widget in ((self._ind_anim, g, self._indicator),
+                                       (self._bar_anim, bar, self._bar)):
+                anim.stop()
+                anim.setStartValue(widget.geometry())
+                anim.setEndValue(rect)
+                anim.start()
+        else:
+            self._indicator.setGeometry(g)
+            self._bar.setGeometry(bar)
+        self._indicator.show()
+        self._bar.show()
+        self._indicator.lower()
+        self._bar.raise_()
+
+    # ------------------------------------------------------------------
+    # Status / project card
+    # ------------------------------------------------------------------
     def set_status(self, text: str):
         """Update the bottom status bar text."""
         self._status_label.setText(text)
 
+    def _refresh_project_card(self, *_args, animate: bool = True):
+        s = self.state.stats()
+        project = self.state.project
+        if not project:
+            self._proj_name.setText("Не открыт")
+            self._proj_pct.setText("Откройте мод на главной")
+            self._proj_bar.setMaximum(100)
+            self._proj_bar.setValue(0)
+            return
+        fm = QFontMetrics(self._proj_name.font())
+        name = project.metadata.name or "Без названия"
+        self._proj_name.setText(fm.elidedText(name, Qt.TextElideMode.ElideMiddle, 180))
+        self._proj_name.setToolTip(name)
+        self._proj_bar.setMaximum(100)
+        self._proj_bar.setValue(s["percent"])
+        self._proj_pct.setText(f"{s['percent']}% · {s['translated']} из {s['total']} строк")
+
+    def _refresh_provider_chip(self):
+        try:
+            s = get_settings()
+            name = _PROVIDER_NAMES.get(s.default_provider, s.default_provider)
+            cfg = s.providers.get(s.default_provider)
+            ready = s.default_provider == "google_free" or bool(cfg and cfg.api_key)
+            self._provider_chip.setText(f"●  {name}" if ready else f"●  {name}: нужен ключ API")
+            self._provider_chip.set_tone("success" if ready else "warning")
+        except Exception:
+            self._provider_chip.setText("●  Провайдер не настроен")
+            self._provider_chip.set_tone("warning")
+
+    # ------------------------------------------------------------------
+    # Toasts (стек в правом нижнем углу)
+    # ------------------------------------------------------------------
     def toast(self, message: str, kind: str = "info", timeout_ms: int = 3500):
         """Show a floating toast notification."""
-        t = Toast(message, kind, timeout_ms, parent=self._toast_host)
-        lay: QVBoxLayout = self._toast_host.layout()
-        lay.addWidget(t, alignment=Qt.AlignmentFlag.AlignRight)
-        t.CLOSED.connect(lambda: lay.removeWidget(t))
+        while len(self._toasts) >= self.MAX_TOASTS:
+            self._toasts.pop(0).dismiss()
+        t = Toast(message, kind, timeout_ms, parent=self)
+        t.CLOSED.connect(lambda t=t: self._toast_closed(t))
+        self._toasts.append(t)
+        self._layout_toasts(new=t)
         t.show()
+        t.raise_()
+        t.present()
+
+    def _toast_closed(self, t: Toast):
+        if t in self._toasts:
+            self._toasts.remove(t)
+        self._layout_toasts()
+
+    def _layout_toasts(self, new: Toast | None = None, animate: bool = True):
+        x = self.width() - Toast.WIDTH - 24
+        y = self.height() - self.statusBar().height() - 20
+        for t in reversed(self._toasts):
+            y -= t.height()
+            if t is new:
+                t.move(self.width() + 10, y)
+            t.slide_to(QPoint(x, y), animate)
+            y -= 10
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self._toast_host.setGeometry(self.rect())
+        self._layout_toasts(animate=False)
+        QTimer.singleShot(0, lambda: self._move_indicator(False))
 
-    def _apply_theme(self, theme: str):
-        import sys
-        pal = DARK if theme == "dark" else LIGHT
-        if theme == "system":
-            pal = DARK if sys.platform == "win32" and QApplication.instance().styleHints().colorScheme() == Qt.ColorScheme.Dark else LIGHT
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(0, lambda: self._move_indicator(False))
+
+    # ------------------------------------------------------------------
+    # Theme
+    # ------------------------------------------------------------------
+    def _apply_theme(self, theme_name: str):
+        pal = DARK
+        if theme_name == "light":
+            pal = LIGHT
+        elif theme_name == "system":
+            try:
+                scheme = QApplication.instance().styleHints().colorScheme()
+                pal = LIGHT if scheme == Qt.ColorScheme.Light else DARK
+            except Exception:
+                pal = DARK
         app = QApplication.instance()
         if app:
             app.setStyleSheet(build_stylesheet(pal))
+        if hasattr(self, "_provider_chip"):
+            self._refresh_provider_chip()
+            self.update()
