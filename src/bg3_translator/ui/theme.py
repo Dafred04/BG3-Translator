@@ -250,6 +250,36 @@ QHeaderView::section { background-color: $surface_alt; border: none; border-bott
     padding: 9px 10px; color: $text_muted; font-weight: 700; }
 QTableCornerButton::section { background-color: $surface_alt; border: none; }
 
+/* ---------- Text areas ---------- */
+QPlainTextEdit, QTextEdit { background-color: $surface; border: 1px solid $border; border-radius: 9px;
+    padding: 8px 10px; selection-background-color: $accent; selection-color: #ffffff; }
+QPlainTextEdit:hover, QTextEdit:hover { border-color: $border_strong; }
+QPlainTextEdit:focus, QTextEdit:focus { border-color: $accent; }
+QPlainTextEdit[readOnly="true"] { background-color: $bg_elevated; }
+
+/* ---------- Dialogs ---------- */
+QDialog, QMessageBox { background-color: $bg_elevated; }
+QMessageBox QLabel { background: transparent; }
+
+/* ---------- Splitter ---------- */
+QSplitter::handle { background: transparent; }
+QSplitter::handle:horizontal { width: 10px; }
+QSplitter::handle:hover { background-color: $accent_soft; }
+
+/* ---------- Segmented control ---------- */
+#Seg { background-color: transparent; border: 1px solid $border_strong; border-radius: 9px;
+       padding: 7px 18px; color: $text_muted; font-weight: 600; }
+#Seg:hover { color: $text; border-color: $accent; }
+#Seg:checked { background-color: $accent_soft; color: $accent_hover; border-color: $accent; font-weight: 700; }
+
+/* ---------- Notices ---------- */
+#Banner { background-color: $accent_soft; border: 1px solid $accent; border-radius: 10px; }
+#IssueError { color: $danger; }
+#IssueWarn { color: $warning; }
+#Hint { color: $text_muted; font-size: ${fs_s}px; }
+#RecentRow { background-color: $surface_alt; border: 1px solid $border; border-radius: 10px; }
+#RecentRow:hover { border-color: $accent; }
+
 /* ---------- Menu ---------- */
 QMenu { background-color: $surface; border: 1px solid $border_strong; border-radius: 10px; padding: 6px; }
 QMenu::item { padding: 8px 24px 8px 14px; border-radius: 6px; }
@@ -297,6 +327,25 @@ QStatusBar::item { border: none; }
 
 QWidget:focus { outline: none; }
 """)
+
+
+def build_qpalette(pal: Palette):
+    """QPalette под тему: нужна для того, что QSS не покрывает (системные диалоги, подсказки)."""
+    from PySide6.QtGui import QColor, QPalette
+
+    p = QPalette()
+    R, G = QPalette.ColorRole, QPalette.ColorGroup
+    for role, color in (
+        (R.Window, pal.bg), (R.WindowText, pal.text), (R.Base, pal.surface),
+        (R.AlternateBase, pal.bg_elevated), (R.Text, pal.text), (R.Button, pal.surface_alt),
+        (R.ButtonText, pal.text), (R.ToolTipBase, pal.surface_alt), (R.ToolTipText, pal.text),
+        (R.Highlight, pal.accent), (R.HighlightedText, "#ffffff"), (R.Link, pal.accent_hover),
+        (R.PlaceholderText, pal.text_muted), (R.BrightText, "#ffffff"),
+    ):
+        p.setColor(role, QColor(color))
+    for role in (R.Text, R.ButtonText, R.WindowText):
+        p.setColor(G.Disabled, role, QColor(pal.text_muted))
+    return p
 
 
 def build_stylesheet(pal: Palette) -> str:

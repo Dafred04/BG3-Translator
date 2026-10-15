@@ -60,6 +60,7 @@ class TranslationEntry:
     entry_type: EntryType = EntryType.TEXT
     context: str = ""
     comment: str = ""
+    version: int = 1            # версия строки в .loca (для режима обновления мода)
 
     # Placeholders
     source_placeholders: List[Placeholder] = field(default_factory=list)
@@ -102,6 +103,7 @@ class TranslationEntry:
             "entry_type": self.entry_type.value,
             "context": self.context,
             "comment": self.comment,
+            "version": self.version,
             "source_placeholders": [p.__dict__ for p in self.source_placeholders],
             "target_placeholders": [p.__dict__ for p in self.target_placeholders],
             "validation_errors": self.validation_errors,
@@ -126,6 +128,7 @@ class TranslationEntry:
             entry_type=EntryType(data.get("entry_type", "text")),
             context=data.get("context", ""),
             comment=data.get("comment", ""),
+            version=int(data.get("version", 1)),
             validation_errors=data.get("validation_errors", []),
             validation_warnings=data.get("validation_warnings", []),
             translated_by=data.get("translated_by", ""),

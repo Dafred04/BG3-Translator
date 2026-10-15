@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QRect, QSize, Qt, QTimer
+from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QRect, QSize, Qt, QThread, QTimer
 from PySide6.QtGui import QFontMetrics, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QFrame, QHBoxLayout, QLabel, QMainWindow,
@@ -10,8 +10,8 @@ from PySide6.QtWidgets import (
 )
 
 from . import theme
-from .theme import DARK, LIGHT, build_stylesheet
-from .state import get_app_state
+from .theme import DARK, LIGHT, build_qpalette, build_stylesheet
+from .state import api_key_for, get_app_state
 from .widgets import Chip, FadeStack, GlowProgressBar, Toast, repolish
 from ..config import get_settings
 
@@ -154,6 +154,8 @@ class MainWindow(QMainWindow):
         self._nav_buttons[0].setChecked(True)
         self._cur_idx = 0
         self.state.project_changed.connect(self._refresh_project_card)
+        self.state.project_changed.connect(self._update_title)
+        QShortcut(QKeySequence("Ctrl+S"), self, activated=self.save_now)
         self.state.entry_edited.connect(lambda _h: self._refresh_project_card())
         self._refresh_project_card(animate=False)
         QTimer.singleShot(0, lambda: self._move_indicator(False))
@@ -216,12 +218,45 @@ class MainWindow(QMainWindow):
         self._proj_bar.setValue(s["percent"])
         self._proj_pct.setText(f"{s['percent']}% · {s['translated']} из {s['total']} строк")
 
+    def _update_title(self):
+        p = self.state.project
+        self.setWindowTitle(f"{p.metadata.name} — BG3 Mod Translator" if p else "BG3 Mod Translator")
+
+    def save_now(self):
+        """Ctrl+S: сохранить проект сразу."""
+        if self.state.project is None:
+            self.toast("Нет открытого проекта.", "info")
+            return
+        path = self.state.save_project()
+        if path:
+            self.toast(f"Проект сохранён: {path.name}", "success", 2500)
+        else:
+            self.toast("Не удалось сохранить проект. Подробности — в журнале.", "error", 5000)
+
+    def closeEvent(self, event):
+        """Остановить перевод и сохранить проект, чтобы ничего не потерять."""
+        try:
+            engine = self.state.engine
+            if engine.is_running():
+                engine.cancel()
+                for _ in range(50):                      # дождаться воркера до 2.5 с
+                    if not engine.is_running():
+                        break
+                    QApplication.processEvents()
+                    QThread.msleep(50)
+            self.state.save_project()
+        except Exception:
+            pass
+        super().closeEvent(event)
+
     def _refresh_provider_chip(self):
         try:
             s = get_settings()
             name = _PROVIDER_NAMES.get(s.default_provider, s.default_provider)
             cfg = s.providers.get(s.default_provider)
-            ready = s.default_provider == "google_free" or bool(cfg and cfg.api_key)
+            local = bool(cfg and cfg.base_url) and s.default_provider == "openai_compatible"
+            ready = (s.default_provider == "google_free" or local
+                     or bool(api_key_for(s, s.default_provider)))
             self._provider_chip.setText(f"●  {name}" if ready else f"●  {name}: нужен ключ API")
             self._provider_chip.set_tone("success" if ready else "warning")
         except Exception:
@@ -282,6 +317,7 @@ class MainWindow(QMainWindow):
                 pal = DARK
         app = QApplication.instance()
         if app:
+            app.setPalette(build_qpalette(pal))
             app.setStyleSheet(build_stylesheet(pal))
         if hasattr(self, "_provider_chip"):
             self._refresh_provider_chip()

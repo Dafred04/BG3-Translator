@@ -89,6 +89,13 @@ class AppSettings:
     dictionary_match_threshold: float = 0.85
     cache_translations: bool = True
 
+    # Pipeline (v2.1)
+    shield_placeholders: bool = True     # заменять теги токенами перед отправкой ИИ
+    use_glossary: bool = True            # подставлять термины глоссария в запрос
+    use_fuzzy: bool = False              # нечёткие совпадения со словарём (порог: dictionary_match_threshold)
+    translation_style: str = ""          # пожелания к стилю перевода (идут в промпт)
+    custom_prompt: str = ""              # дополнительные инструкции для ИИ
+
     # Validation
     validate_placeholders: bool = True
     validate_terminology: bool = True

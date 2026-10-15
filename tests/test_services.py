@@ -101,7 +101,9 @@ def test_engine_batch_progress(tmp_path):
     progress = engine.translate_batch(entries, on_progress=lambda p: seen.append(p.done))
     assert progress.total == 3 and progress.done == 3
     assert progress.percent == 100
-    assert seen == [1, 2, 3]
+    # Строки идут пакетами, поэтому прогресс приходит не после каждой строки:
+    # важно, чтобы он не убывал и закончился на 3.
+    assert seen and seen == sorted(seen) and seen[-1] == 3, seen
     assert entries[2].target_text == "[tr]Unknown"
     print("engine batch progress: OK")
 

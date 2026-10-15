@@ -1,19 +1,28 @@
-"""BG3 localization XML (.loc / .xml) parse & generate.
+"""Локализация BG3: чтение .loca/.xml и запись.
 
-BG3 localization files use this structure:
-  <content root="ResourceList">
-    <version major="1" minor="0" revision="0" build="0"/>
+Формат записи по умолчанию — тот, что использует LSLib и сама игра для XML-версии .loca:
+
     <contentList>
-      <translated_string handle="hXXXXXXXX"><content str="..."/></translated_string>
+      <content contentuid="h..." version="1">Текст</content>
     </contentList>
-  </content>
+
+Старый формат (<content root="ResourceList"><translated_string handle=...>) читается,
+а записывается только при legacy=True.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple
-from xml.etree import ElementTree as ET
+from typing import Dict, Iterable, List, Optional, Tuple, Union
+
+try:                                    # защита от XML-бомб, если библиотека доступна
+    from defusedxml import ElementTree as ET
+except ImportError:                     # pragma: no cover
+    from xml.etree import ElementTree as ET
+from xml.etree import ElementTree as _StdET
 
 from ..models.translation import TranslationEntry
+from .loca import LocaResource, LocaText, read_loca, write_loca
 
 
 @dataclass
@@ -35,115 +44,130 @@ class LocaVersion:
 
 @dataclass
 class ParsedLoca:
-    entries: List[Tuple[str, str]] = field(default_factory=list)  # (handle, content)
+    entries: List[Tuple[str, str]] = field(default_factory=list)      # (handle, content)
     version: LocaVersion = field(default_factory=LocaVersion)
+    versions: Dict[str, int] = field(default_factory=dict)            # handle -> версия строки
+
+
+def _inner(el) -> str:
+    """Текст элемента вместе с неэкранированной разметкой внутри (если она есть)."""
+    return (el.text or "") + "".join(_StdET.tostring(c, encoding="unicode") for c in el)
+
+
+def _int(v, default=1) -> int:
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
 
 
 def parse_loca_xml(xml_text: str) -> ParsedLoca:
-    """Parse BG3 localization XML text into handles/contents + version.
-
-    Supports both real-world shapes:
-      A) translated_string/content-str (classic <content root="ResourceList">)
-      B) flat <contentList><content contentuid="..." version="N">text</content>
-         (as shipped inside mod .pak files, e.g. unique_tav)
-    """
-    # strip BOM if present
+    """Разбирает оба известных вида XML-локализации."""
     if xml_text.startswith("\ufeff"):
         xml_text = xml_text[1:]
-    root = ET.fromstring(xml_text)
+    root = ET.fromstring(xml_text.encode("utf-8") if xml_text.lstrip().startswith("<?xml") else xml_text)
     result = ParsedLoca()
 
     ver_el = root.find("version")
     if ver_el is not None:
         result.version = LocaVersion(
-            major=int(ver_el.get("major", 1)),
-            minor=int(ver_el.get("minor", 0)),
-            revision=int(ver_el.get("revision", 0)),
-            build=int(ver_el.get("build", 0)),
+            major=_int(ver_el.get("major"), 1), minor=_int(ver_el.get("minor"), 0),
+            revision=_int(ver_el.get("revision"), 0), build=_int(ver_el.get("build"), 0),
         )
 
-    # Shape A
-    for ts in root.iter("translated_string"):
+    for ts in root.iter("translated_string"):                    # старый формат
         handle = ts.get("handle", "")
         content_el = ts.find("content")
         content = content_el.get("str", "") if content_el is not None else ""
         if handle:
             result.entries.append((handle, content))
+            result.versions[handle] = 1
     if result.entries:
         return result
 
-    # Shape B: flat <content contentuid="...">text</content>
-    for el in root.iter("content"):
+    for el in root.iter("content"):                              # формат LSLib / игры
         handle = el.get("contentuid", "")
         if not handle:
             continue
-        text = (el.text or "").strip()
-        result.entries.append((handle, text))
+        result.entries.append((handle, _inner(el)))
+        result.versions[handle] = _int(el.get("version"), 1)
     return result
 
 
+def parse_loca_binary(data: bytes) -> ParsedLoca:
+    res = read_loca(data)
+    out = ParsedLoca()
+    for e in res.entries:
+        out.entries.append((e.key, e.text))
+        out.versions[e.key] = e.version
+    return out
+
+
+Pair = Union[Tuple[str, str], Tuple[str, str, int]]
+
+
+def _norm_entries(entries: Iterable[Pair], versions: Optional[Dict[str, int]]):
+    for item in entries:
+        handle, content = item[0], item[1]
+        ver = item[2] if len(item) > 2 else (versions or {}).get(handle, 1)
+        yield handle, content, ver
+
+
+def _esc(text: str) -> str:
+    return (text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            .replace("\r", "&#13;"))
+
+
 def build_loca_xml(
-    entries: List[Tuple[str, str]],
-    version: LocaVersion | None = None,
-    source_version: LocaVersion | None = None,
+    entries: Iterable[Pair],
+    version: Optional[LocaVersion] = None,
+    source_version: Optional[LocaVersion] = None,
+    versions: Optional[Dict[str, int]] = None,
+    legacy: bool = False,
 ) -> str:
-    """Generate BG3 localization XML from (handle, content) pairs.
+    """XML-локализация. entries: (handle, text) или (handle, text, version).
 
-    Ensures output version >= source_version (version downgrade protection).
+    Если передан version или source_version, пишется формат с элементом <version>
+    (как раньше) — иначе плоский <contentList>/<content contentuid=…>.
     """
-    out_version = version or LocaVersion()
-    if source_version is not None and out_version < source_version:
-        out_version = LocaVersion(
-            major=source_version.major,
-            minor=source_version.minor,
-            revision=source_version.revision,
-            build=source_version.build + 1,  # bump revision to stay strictly newer
-        )
+    items = list(_norm_entries(entries, versions))
+    legacy = legacy or version is not None or source_version is not None
+    if legacy:
+        out_version = version or LocaVersion()
+        if source_version is not None and out_version < source_version:
+            out_version = LocaVersion(source_version.major, source_version.minor,
+                                      source_version.revision, source_version.build + 1)
+        lines = ['<?xml version="1.0" encoding="utf-8"?>', '<content root="ResourceList">',
+                 f'  <version major="{out_version.major}" minor="{out_version.minor}" '
+                 f'revision="{out_version.revision}" build="{out_version.build}"/>', "  <contentList>"]
+        for handle, content, _v in items:
+            esc = _esc(content).replace('"', "&quot;").replace("\n", "&#10;")
+            lines += [f'    <translated_string handle="{handle}">',
+                      f'      <content str="{esc}"/>', "    </translated_string>"]
+        lines += ["  </contentList>", "</content>"]
+        return "\n".join(lines)
 
-    lines = [
-        '<?xml version="1.0" encoding="utf-8"?>',
-        '<content root="ResourceList">',
-        (
-            f'  <version major="{out_version.major}" minor="{out_version.minor}" '
-            f'revision="{out_version.revision}" build="{out_version.build}"/>'
-        ),
-        "  <contentList>",
-    ]
-    for handle, content in entries:
-        esc = (
-            content.replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace('"', "&quot;")
-        )
-        lines.append(f'    <translated_string handle="{handle}">')
-        lines.append(f'      <content str="{esc}"/>')
-        lines.append("    </translated_string>")
-    lines.append("  </contentList>")
-    lines.append("</content>")
-    return "\n".join(lines)
+    lines = ['<?xml version="1.0" encoding="utf-8"?>', "<contentList>"]
+    for handle, content, ver in items:
+        lines.append(f'  <content contentuid="{handle}" version="{ver}">{_esc(content)}</content>')
+    lines.append("</contentList>")
+    return "\n".join(lines) + "\n"
 
 
-def loca_to_entries(
-    loca: ParsedLoca,
-    source_language: str = "en",
-    target_language: str = "zh",
-) -> List[TranslationEntry]:
-    """Convert parsed LOCA into TranslationEntry list (source only)."""
+def build_loca_binary(entries: Iterable[Pair], versions: Optional[Dict[str, int]] = None) -> bytes:
+    res = LocaResource([LocaText(key=h, version=v, text=t) for h, t, v in _norm_entries(entries, versions)])
+    return write_loca(res)
+
+
+def loca_to_entries(loca: ParsedLoca, source_language: str = "en",
+                    target_language: str = "ru") -> List[TranslationEntry]:
+    """ParsedLoca -> TranslationEntry (только оригинал)."""
     return [
-        TranslationEntry(
-            handle=handle,
-            source_text=content,
-            source_language=source_language,
-            target_language=target_language,
-        )
-        for handle, content in loca.entries
+        TranslationEntry(handle=h, source_text=c, source_language=source_language,
+                         target_language=target_language, version=loca.versions.get(h, 1))
+        for h, c in loca.entries
     ]
 
 
-def merge_translations(
-    original: ParsedLoca,
-    translations: Dict[str, str],
-) -> List[Tuple[str, str]]:
-    """Merge: original handles in order, using translated text when available."""
-    return [(handle, translations.get(handle, content)) for handle, content in original.entries]
+def merge_translations(original: ParsedLoca, translations: Dict[str, str]) -> List[Tuple[str, str]]:
+    return [(h, translations.get(h, c)) for h, c in original.entries]

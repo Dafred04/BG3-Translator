@@ -13,10 +13,13 @@ def test_validation():
 
     tgt_bad = 'Привет name'
     e2, _ = compare_placeholders(src, tgt_bad)
-    assert len(e2) == 4, e2  # lstag, entity, format, numeric missing
+    # Теги <LSTag> и </LSTag> теперь считаются отдельно (текст между ними переводится),
+    # поэтому пропущено 5 элементов: открывающий и закрывающий тег, {0}, &amp; и [1].
+    assert len(e2) == 5, e2
 
     ph = extract_placeholders(src)
-    assert [p.type for p in ph] == ["lstag", "format", "entity", "numeric"], [p.type for p in ph]
+    assert [p.type for p in ph] == ["lstag_open", "lstag_close", "format", "entity", "numeric"], \
+        [p.type for p in ph]
     print("validation: OK")
 
 def test_locaxml():

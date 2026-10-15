@@ -38,6 +38,7 @@ from bg3_translator.ui.pages.settings_page import SettingsPage
 # project load -> editor fills table
 from bg3_translator.models.translation import TranslationEntry, ModMetadata, TranslationProject
 state = win.pages["dashboard"].state
+state.save_project = lambda path=None: None      # тест не должен писать в реальные проекты пользователя
 state.project = TranslationProject(
     metadata=ModMetadata(name="TestMod"),
     entries=[TranslationEntry(handle=f"h{i}", source_text=f"String {i}") for i in range(5)],

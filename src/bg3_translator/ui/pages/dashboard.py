@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
+from pathlib import Path
+
 from PySide6.QtCore import Qt, QThread
 from PySide6.QtWidgets import (
-    QComboBox, QFileDialog, QHBoxLayout, QLabel, QPushButton, QScrollArea,
+    QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea,
     QVBoxLayout, QWidget,
 )
 
@@ -14,6 +17,8 @@ from ..widgets import (
     RingProgress, StatTile, repolish,
 )
 from ...config import SUPPORTED_LANGUAGES
+
+log = logging.getLogger(__name__)
 
 
 class StepItem(QWidget):
@@ -123,8 +128,12 @@ class DashboardPage(QWidget):
         self.open_btn.clicked.connect(self._open_mod)
         self.open_folder_btn = GhostButton("Открыть папку…")
         self.open_folder_btn.clicked.connect(self._open_folder)
+        self.open_project_btn = GhostButton("Мой проект…")
+        self.open_project_btn.setToolTip("Продолжить сохранённый проект (.json)")
+        self.open_project_btn.clicked.connect(self._open_project_dialog)
         btns.addWidget(self.open_btn)
         btns.addWidget(self.open_folder_btn)
+        btns.addWidget(self.open_project_btn)
         btns.addStretch(1)
         left.addLayout(btns)
         left.addStretch(1)
@@ -209,11 +218,26 @@ class DashboardPage(QWidget):
         pl.addWidget(self.continue_btn)
         bottom.addWidget(proj_card, 2)
         lay.addLayout(bottom)
+
+        # ---------------- Недавние проекты ----------------
+        self.recent_card = Card()
+        self.recent_lay = QVBoxLayout(self.recent_card)
+        self.recent_lay.setContentsMargins(24, 20, 24, 20)
+        self.recent_lay.setSpacing(8)
+        rt2 = QLabel("Недавние проекты")
+        rt2.setObjectName("Title")
+        self.recent_lay.addWidget(rt2)
+        self.recent_rows = QVBoxLayout()
+        self.recent_rows.setSpacing(8)
+        self.recent_lay.addLayout(self.recent_rows)
+        lay.addWidget(self.recent_card)
         lay.addStretch(1)
 
         self.state.project_changed.connect(self.refresh)
+        self.state.project_changed.connect(self._refresh_recent)
         self.state.entry_edited.connect(lambda _h: self.refresh())
         self.refresh(animate=False)
+        self._refresh_recent()
 
     # ------------------------------------------------------------------
     @staticmethod
@@ -229,6 +253,72 @@ class DashboardPage(QWidget):
     def showEvent(self, event):
         super().showEvent(event)
         self.refresh()
+        self._refresh_recent()
+
+    # ------------------------------------------------------------------
+    # Недавние проекты
+    # ------------------------------------------------------------------
+    def _refresh_recent(self, *_):
+        while self.recent_rows.count():
+            item = self.recent_rows.takeAt(0)
+            if item.widget() is not None:
+                item.widget().deleteLater()
+        items = self.state.recent_projects()
+        self.recent_card.setVisible(bool(items))
+        for r in items:
+            self.recent_rows.addWidget(self._recent_row(r))
+
+    def _recent_row(self, r: dict) -> QWidget:
+        row = QFrame()
+        row.setObjectName("RecentRow")
+        lay = QHBoxLayout(row)
+        lay.setContentsMargins(14, 10, 10, 10)
+        lay.setSpacing(10)
+        col = QVBoxLayout()
+        col.setSpacing(1)
+        name = QLabel(r.get("name") or Path(r.get("path", "")).stem)
+        name.setObjectName("CardTitle")
+        total, done = int(r.get("total") or 0), int(r.get("translated") or 0)
+        pct = int(done / total * 100) if total else 0
+        info = QLabel(f"{r.get('source', '')} → {r.get('target', '')} · переведено {done} из {total} ({pct}%)"
+                      f" · {str(r.get('updated', ''))[:16].replace('T', ' ')}")
+        info.setObjectName("Hint")
+        col.addWidget(name)
+        col.addWidget(info)
+        lay.addLayout(col, 1)
+        open_btn = PrimaryButton("Открыть")
+        open_btn.clicked.connect(lambda _=False, p=r.get("path", ""): self._open_project(p))
+        drop = GhostButton("✕")
+        drop.setToolTip("Убрать из списка (файл не удаляется)")
+        drop.setFixedWidth(38)
+        drop.clicked.connect(lambda _=False, p=r.get("path", ""): self._forget(p))
+        lay.addWidget(open_btn)
+        lay.addWidget(drop)
+        return row
+
+    def _forget(self, path: str):
+        self.state.remove_recent(path)
+        self._refresh_recent()
+
+    def _open_project_dialog(self):
+        if self._busy:
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Открыть проект", str(self.state.projects_dir()), "Проекты перевода (*.json)")
+        if path:
+            self._open_project(path)
+
+    def _open_project(self, path: str):
+        if self._busy or not path:
+            return
+        try:
+            project = self.state.load_project(path)
+        except Exception as exc:
+            log.exception("Не удалось открыть проект")
+            self.main.toast(f"Не удалось открыть проект: {exc}", "error", 6000)
+            return
+        self.main.toast(f"Проект открыт: {project.metadata.name}", "success")
+        self.main.navigate("editor")
 
     def refresh(self, *_args, animate: bool = True):
         s = self.state.stats()
@@ -260,7 +350,7 @@ class DashboardPage(QWidget):
             return
         path, _ = QFileDialog.getOpenFileName(
             self, "Открыть файл мода", "",
-            "Файлы модов BG3 (*.pak *.zip *.xml);;Все файлы (*)"
+            "Файлы модов BG3 (*.pak *.zip *.loca *.xml);;Все файлы (*)"
         )
         if path:
             self._start_import(path, False)
@@ -276,10 +366,14 @@ class DashboardPage(QWidget):
         self._busy = busy
         self.open_btn.setEnabled(not busy)
         self.open_folder_btn.setEnabled(not busy)
+        self.open_project_btn.setEnabled(not busy)
         self.busy_bar.setVisible(busy)
 
     def _start_import(self, path: str, is_folder: bool):
         if self._busy:
+            return
+        if Path(path).suffix.lower() == ".json":              # перетащили сохранённый проект
+            self._open_project(path)
             return
         from .editor import ImportWorker
 
@@ -292,6 +386,7 @@ class DashboardPage(QWidget):
                                     self.target_lang.currentData())
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
+        self._worker.progress.connect(self.main.set_status)
         self._worker.finished.connect(self._on_import_done)
         self._worker.failed.connect(self._on_import_failed)
         self._worker.finished.connect(self._thread.quit)
@@ -299,10 +394,16 @@ class DashboardPage(QWidget):
         self._thread.start()
 
     def _on_import_done(self, project):
-        self.state.project = project
-        self.state.project_changed.emit()
-        self.main.toast(f"Загружено строк: {project.total_entries}", "success")
+        result = getattr(self._worker, "result", None)
+        self.state.set_project(project)
+        self.state.save_project()                    # сразу в «Недавние», чтобы мод не пропал
         self._set_busy(False)
+        msg = f"Загружено строк: {project.total_entries}"
+        if result is not None and result.prefilled:
+            msg += f" · найден готовый перевод для {result.prefilled}"
+        self.main.toast(msg, "success", 5000)
+        if result is not None and result.diagnostics:
+            self.main.toast("; ".join(result.diagnostics[:2]), "info", 7000)
         self.main.navigate("editor")
 
     def _on_import_failed(self, error: str):

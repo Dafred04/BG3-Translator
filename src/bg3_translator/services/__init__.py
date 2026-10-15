@@ -10,6 +10,7 @@ from .providers import (
     get_provider,
 )
 from .engine import TranslationEngine
+from .importer import ImportFailure, ImportResult, apply_translation_file, import_mod
 
 __all__ = [
     "DictionaryStore",
@@ -22,4 +23,8 @@ __all__ = [
     "TranslationError",
     "get_provider",
     "TranslationEngine",
+    "ImportFailure",
+    "ImportResult",
+    "apply_translation_file",
+    "import_mod",
 ]

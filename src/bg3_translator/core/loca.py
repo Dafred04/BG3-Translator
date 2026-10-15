@@ -52,7 +52,7 @@ def read_loca(data: bytes) -> LocaResource:
         version, length = struct.unpack_from("<HI", raw, LOCA_KEY_SIZE)
         if pos + length > len(data):
             raise LocaError(f"Truncated text for handle {key!r}")
-        text = data[pos:pos + length - 1].decode("utf-8", "replace")
+        text = data[pos:pos + max(length - 1, 0)].decode("utf-8", "replace")
         pos += length
         res.entries.append(LocaText(key=key, version=version, text=text))
     return res
